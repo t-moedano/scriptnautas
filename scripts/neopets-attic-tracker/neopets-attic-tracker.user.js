@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Neopets: Rastreador & Temporizador do Sótão Quase Abandonado
 // @namespace    https://github.com/t-moedano/scriptnautas
-// @version      1.0.0
-// @description  Temporizador e rastreador de horários de restock para o Sótão Quase Abandonado (Almost Abandoned Attic) do Neopets com conversor de fuso horário, alertas sonoros e notificações.
+// @version      1.0.1
+// @description  Barra compacta e inteligente de temporizador de restock para o Sótão Quase Abandonado (Almost Abandoned Attic) do Neopets com fuso horário duplo, alertas sonoros e sem sobreposição de itens.
 // @author       t-moedano
 // @match        *://*.neopets.com/halloween/garage.phtml*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=neopets.com
@@ -24,7 +24,7 @@
 
     // Regra matemática do Sótão:
     // Ciclo base de restock: 7 minutos (420 segundos)
-    // Janela de incerteza cumulativa (drift): até 15 segundos por ciclo
+    // Drift cumulativo: até 15 segundos por ciclo
     const RESTOCK_CYCLE_MS = 7 * 60 * 1000;
     const CYCLE_DRIFT_STEP_MS = 15 * 1000;
 
@@ -38,11 +38,9 @@
         soundAlert10s: true,
         soundAlertWindow: true,
         tabTitleCountdown: true,
-        overtimeSeconds: 35, // Segundos adicionais de tolerância após a janela oficial
-        panelCollapsed: false
+        overtimeSeconds: 30
     };
 
-    // Fuso horários populares para seleção rápida
     const COMMON_TIMEZONES = [
         { label: '🇧🇷 Horário de Brasília (BRT / UTC-3)', value: 'America/Sao_Paulo' },
         { label: '🇧🇷 Horário de Manaus / Amazonas (AMT / UTC-4)', value: 'America/Manaus' },
@@ -50,7 +48,7 @@
         { label: '🇧🇷 Horário do Acre (ACT / UTC-5)', value: 'America/Rio_Branco' },
         { label: '🇵🇹 Horário de Lisboa / Portugal (WET / WEST)', value: 'Europe/Lisbon' },
         { label: '🌐 Horário Universal Coordenado (UTC)', value: 'UTC' },
-        { label: '💻 Fuso Horário Local do Navegador', value: 'AUTO' }
+        { label: '💻 Fuso do Navegador (Automático)', value: 'AUTO' }
     ];
 
     // =========================================================================
@@ -94,18 +92,15 @@
     // SINCRONIZAÇÃO DE TEMPO & FUSOS HORÁRIOS
     // =========================================================================
 
-    // Diferença em ms entre o relógio local do usuário e o relógio do Neopets (caso haja drift no PC)
     let serverTimeDriftMs = 0;
     const pageLoadLocalPerf = performance.now();
     const pageLoadLocalDate = Date.now();
 
     function detectServerNstTime() {
-        // Tenta encontrar o elemento oficial do relógio no layout clássico
         const nstEl = document.querySelector('#nst, .nst, span[id="nst"]');
         if (!nstEl || !nstEl.textContent) return;
 
         const text = nstEl.textContent.trim();
-        // Formatos comuns: "1:23:45 pm NST" ou "01:23:45 pm" ou "13:23:45"
         const match = text.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(am|pm)?/i);
         if (!match) return;
 
@@ -117,18 +112,14 @@
         if (meridian === 'pm' && hours < 12) hours += 12;
         if (meridian === 'am' && hours === 12) hours = 0;
 
-        // Calcula o timestamp NST esperado correspondente a hoje
         const nowUtc = new Date();
-        const nstDateStr = nowUtc.toLocaleDateString('en-US', { timeZone: NST_TIMEZONE });
-        const estimatedNstDate = new Date(`${nstDateStr} ${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')} GMT-0700`);
-
-        // Ajusta para PDT (UTC-7) ou PST (UTC-8) automaticamente
         const nstFormatter = new Intl.DateTimeFormat('en-US', {
             timeZone: NST_TIMEZONE,
             timeZoneName: 'short'
         });
         const isPdt = nstFormatter.format(nowUtc).includes('PDT');
         const offsetHours = isPdt ? 7 : 8;
+
         const targetServerUtcMs = Date.UTC(
             nowUtc.getUTCFullYear(),
             nowUtc.getUTCMonth(),
@@ -138,14 +129,12 @@
             seconds
         );
 
-        // Se a diferença for plausível (< 12 horas), calcula a compensação
         const diff = targetServerUtcMs - pageLoadLocalDate;
         if (Math.abs(diff) < 12 * 60 * 60 * 1000) {
             serverTimeDriftMs = diff;
         }
     }
 
-    // Retorna o timestamp atual compensado
     function getCorrectedNow() {
         const elapsed = performance.now() - pageLoadLocalPerf;
         return pageLoadLocalDate + elapsed + serverTimeDriftMs;
@@ -187,7 +176,6 @@
         return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
     }
 
-    // Converte string de hora NST digitada (ex: "14:22:15" ou "2:22 pm") para timestamp absoluto
     function parseNstInputToTimestamp(inputStr) {
         if (!inputStr) return null;
         const clean = inputStr.trim();
@@ -207,7 +195,6 @@
         if (meridian === 'am' && hours === 12) hours = 0;
 
         const now = new Date(getCorrectedNow());
-        // Obtém o ano/mês/dia atual no fuso NST
         const parts = new Intl.DateTimeFormat('en-US', {
             timeZone: NST_TIMEZONE,
             year: 'numeric',
@@ -223,16 +210,11 @@
             if (p.type === 'day') d = parseInt(p.value, 10);
         }
 
-        // Descobre o offset UTC de NST hoje
-        const nstIso = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-        // Cria objeto provisório em UTC e ajusta
         const isDst = new Intl.DateTimeFormat('en-US', { timeZone: NST_TIMEZONE, timeZoneName: 'short' }).format(now).includes('PDT');
         const offsetHours = isDst ? 7 : 8;
 
         let targetUtcMs = Date.UTC(y, m - 1, d, hours + offsetHours, minutes, seconds);
 
-        // Se o horário informado estiver no futuro em relação ao momento atual (por mais de 10 min),
-        // assume-se que foi no dia anterior
         if (targetUtcMs > now.getTime() + 10 * 60 * 1000) {
             targetUtcMs -= 24 * 60 * 60 * 1000;
         }
@@ -241,7 +223,7 @@
     }
 
     // =========================================================================
-    // GERADOR DE ALERTAS SONOROS (WEB AUDIO API NATIVA)
+    // ÁUDIO NATIVO (WEB AUDIO API)
     // =========================================================================
 
     let audioCtx = null;
@@ -281,7 +263,7 @@
             osc.start(ctx.currentTime + startTimeOffset);
             osc.stop(ctx.currentTime + startTimeOffset + (durationMs / 1000) + 0.05);
         } catch (e) {
-            console.warn('[Attic Tracker] Falha ao reproduzir áudio:', e);
+            console.warn('[Attic Tracker] Erro áudio:', e);
         }
     }
 
@@ -289,38 +271,28 @@
         if (!config.soundEnabled) return;
 
         if (type === '30s' && config.soundAlert30s) {
-            // Dois bips suaves
-            playBeep(440, 120, 0, 'sine');
-            playBeep(554, 140, 0.16, 'sine');
+            playBeep(440, 110, 0, 'sine');
+            playBeep(554, 130, 0.15, 'sine');
         } else if (type === '10s' && config.soundAlert10s) {
-            // Três bips mais rápidos e focados
-            playBeep(587, 100, 0, 'triangle');
-            playBeep(659, 100, 0.13, 'triangle');
-            playBeep(784, 150, 0.26, 'triangle');
+            playBeep(587, 90, 0, 'triangle');
+            playBeep(659, 90, 0.12, 'triangle');
+            playBeep(784, 140, 0.24, 'triangle');
         } else if (type === 'window' && config.soundAlertWindow) {
-            // Arpejo ascendente e chamativo avisando a abertura da janela de restock
-            playBeep(523.25, 120, 0.00, 'sine'); // C5
-            playBeep(659.25, 120, 0.10, 'sine'); // E5
-            playBeep(783.99, 120, 0.20, 'sine'); // G5
-            playBeep(1046.50, 260, 0.30, 'triangle'); // C6
+            playBeep(523.25, 110, 0.00, 'sine');
+            playBeep(659.25, 110, 0.10, 'sine');
+            playBeep(783.99, 110, 0.20, 'sine');
+            playBeep(1046.50, 240, 0.30, 'triangle');
         } else if (type === 'test') {
-            playBeep(523.25, 120, 0.00, 'sine');
-            playBeep(659.25, 120, 0.12, 'sine');
-            playBeep(783.99, 200, 0.24, 'triangle');
+            playBeep(523.25, 110, 0.00, 'sine');
+            playBeep(659.25, 110, 0.11, 'sine');
+            playBeep(783.99, 180, 0.22, 'triangle');
         }
     }
 
     // =========================================================================
-    // CÁLCULO DAS JANELAS DE RESTOCK DO SÓTÃO
+    // CÁLCULO DE JANELAS DO SÓTÃO
     // =========================================================================
 
-    /**
-     * Calcula o ciclo atual e as próximas janelas.
-     * Regra:
-     * - Ciclo k (k = 1, 2, 3...):
-     *   Início: lastRestock + (k * 7m)
-     *   Fim:    lastRestock + (k * 7m) + (k * 15s)
-     */
     function calculateAtticWindows(nowMs) {
         if (!config.lastRestockTimestamp) {
             return {
@@ -334,7 +306,6 @@
         const base = config.lastRestockTimestamp;
         const overtimeMs = (config.overtimeSeconds || 30) * 1000;
 
-        // Encontra qual é o ciclo k atual (o menor k cujo fim + overtime ainda não passou)
         let k = 1;
         while (true) {
             const cycleStart = base + (k * RESTOCK_CYCLE_MS);
@@ -349,7 +320,7 @@
         const currentStart = base + (k * RESTOCK_CYCLE_MS);
         const currentEnd = currentStart + (k * CYCLE_DRIFT_STEP_MS);
 
-        let activeStatus = 'WAITING'; // WAITING | IMMINENT | ACTIVE | OVERTIME
+        let activeStatus = 'WAITING';
         let timeRemainingMs = 0;
 
         if (nowMs < currentStart) {
@@ -369,7 +340,6 @@
             timeRemainingMs = (currentEnd + overtimeMs) - nowMs;
         }
 
-        // Gera a lista das próximas 5 janelas
         const upcomingCycles = [];
         for (let i = 0; i < 5; i++) {
             const cycleIndex = k + i;
@@ -399,27 +369,19 @@
     }
 
     // =========================================================================
-    // DETECÇÃO AUTOMÁTICA DE ITENS NO SÓTÃO
+    // DETECÇÃO DE ITENS NO SÓTÃO
     // =========================================================================
 
     function detectAtticStockOnPage() {
-        // Verifica se há itens à venda na página
-        // Na página clássica de garagem do Neopets, itens à venda aparecem com links para compra
-        const buyLinks = document.querySelectorAll('a[href*="garage.phtml?action=buy"], form[action*="garage.phtml"]');
-        const itemImages = document.querySelectorAll('img[src*="/items/"]:not([src*="ghostchia"]):not([src*="header"])');
-
-        // Se houver links de compra ou itens não vazios
-        if (buyLinks.length > 0 || itemImages.length > 0) {
-            return {
-                stocked: true,
-                count: buyLinks.length || itemImages.length
-            };
-        }
-        return { stocked: false, count: 0 };
+        const items = document.querySelectorAll('#items li');
+        return {
+            stocked: items.length > 0,
+            count: items.length
+        };
     }
 
     // =========================================================================
-    // INTERFACE VISUAL (PAINEL DO SÓTÃO)
+    // INTERFACE VISUAL ULTRA COMPACTA (TOOLBAR HUD)
     // =========================================================================
 
     let uiElements = {};
@@ -431,659 +393,555 @@
         const style = document.createElement('style');
         style.id = 'neopets-attic-tracker-styles';
         style.textContent = `
-            #attic-tracker-panel {
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-                background: linear-gradient(145deg, #181926 0%, #202235 100%);
-                color: #e2e8f0;
-                border: 1px solid #3b3d5c;
-                border-radius: 12px;
-                box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
-                margin: 15px auto 25px auto;
-                max-width: 820px;
-                padding: 16px 20px;
-                box-sizing: border-box;
-                font-size: 13px;
-                line-height: 1.45;
-                text-align: left;
+            /* Container da Barra Compacta */
+            #attic-hud-wrapper {
                 position: relative;
-            }
-
-            #attic-tracker-panel * {
+                margin: 0 0 12px 0;
+                width: 100%;
                 box-sizing: border-box;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                z-index: 100;
+                clear: both;
             }
 
-            .attic-header {
+            #attic-hud-bar {
+                background: linear-gradient(180deg, #1e2030 0%, #151624 100%);
+                color: #e2e8f0;
+                border: 1px solid #363952;
+                border-radius: 8px;
+                padding: 6px 12px;
                 display: flex;
                 align-items: center;
                 justify-content: space-between;
-                border-bottom: 1px solid #333652;
-                padding-bottom: 12px;
-                margin-bottom: 14px;
+                gap: 8px;
+                box-shadow: 0 3px 10px rgba(0, 0, 0, 0.25);
+                min-height: 44px;
+                box-sizing: border-box;
+                flex-wrap: wrap;
             }
 
-            .attic-header-left {
+            /* Bloco Esquerda: Título & Relógios */
+            .attic-hud-left {
                 display: flex;
                 align-items: center;
                 gap: 10px;
+                flex-shrink: 0;
             }
 
-            .attic-title-badge {
-                background: #6366f1;
+            .attic-hud-badge {
+                background: #4f46e5;
                 color: #ffffff;
                 font-size: 11px;
                 font-weight: 700;
-                padding: 3px 8px;
-                border-radius: 6px;
+                padding: 3px 7px;
+                border-radius: 5px;
                 letter-spacing: 0.5px;
                 text-transform: uppercase;
-            }
-
-            .attic-title {
-                font-size: 17px;
-                font-weight: 700;
-                color: #f8fafc;
-                margin: 0;
                 display: flex;
                 align-items: center;
-                gap: 6px;
+                gap: 4px;
             }
 
-            .attic-header-actions {
-                display: flex;
-                align-items: center;
-                gap: 8px;
-            }
-
-            .attic-btn-icon {
-                background: #2a2c42;
-                border: 1px solid #434668;
-                color: #cbd5e1;
-                border-radius: 6px;
-                width: 30px;
-                height: 30px;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                cursor: pointer;
-                transition: all 0.15s ease;
-                font-size: 13px;
-            }
-
-            .attic-btn-icon:hover {
-                background: #373a5a;
-                color: #ffffff;
-                border-color: #6366f1;
-            }
-
-            /* Banner de Detecção Automática */
-            .attic-detection-alert {
-                background: linear-gradient(135deg, #065f46 0%, #047857 100%);
-                border: 1px solid #10b981;
-                color: #ecfdf5;
-                padding: 12px 16px;
-                border-radius: 8px;
-                margin-bottom: 14px;
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                gap: 12px;
-                animation: attic-pulse-subtle 2s infinite;
-            }
-
-            .attic-detection-alert-text {
-                font-size: 13px;
-                font-weight: 600;
-                display: flex;
-                align-items: center;
-                gap: 8px;
-            }
-
-            /* Grid Principal */
-            .attic-main-grid {
-                display: grid;
-                grid-template-columns: 1fr 1fr;
-                gap: 16px;
-                margin-bottom: 16px;
-            }
-
-            @media (max-width: 680px) {
-                .attic-main-grid {
-                    grid-template-columns: 1fr;
-                }
-            }
-
-            /* Cartão do Timer */
-            .attic-card {
-                background: #1e2032;
-                border: 1px solid #31344f;
-                border-radius: 10px;
-                padding: 14px 16px;
+            .attic-hud-clocks {
                 display: flex;
                 flex-direction: column;
-                justify-content: space-between;
-            }
-
-            .attic-timer-display {
-                text-align: center;
-                padding: 10px 0;
-            }
-
-            .attic-timer-status {
-                font-size: 12px;
-                font-weight: 700;
-                text-transform: uppercase;
-                letter-spacing: 0.8px;
-                margin-bottom: 4px;
-            }
-
-            .attic-timer-digits {
-                font-size: 40px;
-                font-weight: 800;
-                font-variant-numeric: tabular-nums;
-                letter-spacing: -1px;
-                line-height: 1.1;
-                margin: 4px 0;
-            }
-
-            .attic-timer-sub {
-                font-size: 11px;
+                font-size: 10px;
+                line-height: 1.25;
                 color: #94a3b8;
             }
 
-            /* Status do Timer */
-            .status-waiting { color: #38bdf8; }
-            .status-attention { color: #facc15; }
-            .status-imminent { color: #fb923c; }
-            .status-active {
-                color: #f43f5e;
-                animation: attic-glow-red 1s infinite alternate;
-            }
-            .status-overtime { color: #a855f7; }
-            .status-nobase { color: #94a3b8; }
-
-            @keyframes attic-glow-red {
-                from { text-shadow: 0 0 4px rgba(244, 63, 94, 0.4); }
-                to { text-shadow: 0 0 16px rgba(244, 63, 94, 0.9), 0 0 24px rgba(244, 63, 94, 0.6); }
-            }
-
-            @keyframes attic-pulse-subtle {
-                0%, 100% { opacity: 1; }
-                50% { opacity: 0.85; }
-            }
-
-            /* Cartão de Controle & Relógios */
-            .attic-clocks-bar {
-                display: flex;
-                justify-content: space-between;
-                background: #141522;
-                border: 1px solid #282a40;
-                border-radius: 8px;
-                padding: 8px 12px;
-                margin-bottom: 12px;
-                font-size: 12px;
-            }
-
-            .attic-clock-item {
-                display: flex;
-                flex-direction: column;
-            }
-
-            .attic-clock-label {
-                color: #64748b;
-                font-size: 10px;
-                font-weight: 700;
-                text-transform: uppercase;
-            }
-
-            .attic-clock-val {
+            .attic-hud-clocks span strong {
                 color: #f1f5f9;
-                font-weight: 600;
                 font-variant-numeric: tabular-nums;
             }
 
-            /* Linhas de Ação Rápida */
-            .attic-actions-row {
+            /* Bloco Centro: O Timer Principal */
+            .attic-hud-center {
                 display: flex;
+                align-items: center;
                 gap: 8px;
-                flex-wrap: wrap;
-                margin-top: 8px;
+                flex-shrink: 0;
             }
 
-            .attic-btn {
-                background: #31344f;
-                color: #f8fafc;
-                border: 1px solid #434769;
+            .attic-hud-timer-pill {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                padding: 3px 10px;
                 border-radius: 6px;
-                padding: 8px 12px;
-                font-size: 12px;
+                font-weight: 700;
+                font-size: 13px;
+                font-variant-numeric: tabular-nums;
+                border: 1px solid transparent;
+                transition: all 0.2s ease;
+            }
+
+            .attic-pill-nobase {
+                background: #232538;
+                color: #94a3b8;
+                border-color: #383a54;
+            }
+
+            .attic-pill-waiting {
+                background: rgba(56, 189, 248, 0.12);
+                color: #38bdf8;
+                border-color: rgba(56, 189, 248, 0.3);
+            }
+
+            .attic-pill-attention {
+                background: rgba(250, 204, 21, 0.15);
+                color: #facc15;
+                border-color: rgba(250, 204, 21, 0.4);
+            }
+
+            .attic-pill-imminent {
+                background: rgba(251, 146, 60, 0.18);
+                color: #fb923c;
+                border-color: rgba(251, 146, 60, 0.5);
+            }
+
+            .attic-pill-active {
+                background: #e11d48;
+                color: #ffffff;
+                border-color: #f43f5e;
+                animation: attic-pulse-glow 0.8s infinite alternate;
+            }
+
+            .attic-pill-overtime {
+                background: rgba(168, 85, 247, 0.15);
+                color: #c084fc;
+                border-color: rgba(168, 85, 247, 0.4);
+            }
+
+            @keyframes attic-pulse-glow {
+                from { box-shadow: 0 0 4px #e11d48; transform: scale(1); }
+                to { box-shadow: 0 0 14px #fb7185; transform: scale(1.03); }
+            }
+
+            .attic-hud-next-info {
+                font-size: 11px;
+                color: #cbd5e1;
+            }
+
+            .attic-hud-next-info span {
+                color: #38bdf8;
+                font-weight: 600;
+            }
+
+            /* Bloco Direita: Ações & Botões */
+            .attic-hud-right {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                flex-shrink: 0;
+            }
+
+            .attic-hud-btn {
+                background: #25283d;
+                color: #f1f5f9;
+                border: 1px solid #3c4060;
+                border-radius: 6px;
+                padding: 4px 9px;
+                font-size: 11px;
                 font-weight: 600;
                 cursor: pointer;
                 transition: all 0.15s ease;
                 display: inline-flex;
                 align-items: center;
-                justify-content: center;
-                gap: 6px;
+                gap: 4px;
+                line-height: 1.3;
             }
 
-            .attic-btn:hover {
-                background: #3e4265;
+            .attic-hud-btn:hover {
+                background: #333754;
                 border-color: #6366f1;
             }
 
-            .attic-btn-primary {
+            .attic-hud-btn-primary {
                 background: #059669;
                 border-color: #10b981;
                 color: #ffffff;
-                flex: 1;
             }
 
-            .attic-btn-primary:hover {
+            .attic-hud-btn-primary:hover {
                 background: #047857;
                 border-color: #34d399;
             }
 
-            .attic-btn-secondary {
-                background: #4338ca;
-                border-color: #6366f1;
-                color: #ffffff;
-            }
-
-            .attic-btn-secondary:hover {
-                background: #3730a3;
-            }
-
-            .attic-btn-skip {
-                background: #475569;
-                border-color: #64748b;
-                color: #f1f5f9;
-            }
-
-            .attic-btn-skip:hover {
-                background: #334155;
-            }
-
-            /* Entrada Manual */
-            .attic-manual-box {
-                display: flex;
-                gap: 6px;
-                margin-top: 10px;
-                align-items: center;
-            }
-
-            .attic-input {
-                background: #141522;
-                border: 1px solid #333652;
-                color: #f8fafc;
-                border-radius: 6px;
-                padding: 6px 10px;
+            .attic-hud-btn-icon {
+                padding: 4px 7px;
                 font-size: 12px;
-                font-family: inherit;
-                outline: none;
-                flex: 1;
             }
 
-            .attic-input:focus {
-                border-color: #6366f1;
-                box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.25);
+            /* Banner Compacto de Estoque Detectado */
+            #attic-hud-stock-alert {
+                background: #047857;
+                border: 1px solid #10b981;
+                color: #ecfdf5;
+                border-radius: 6px;
+                padding: 4px 10px;
+                margin-top: 6px;
+                display: none;
+                align-items: center;
+                justify-content: space-between;
+                font-size: 11px;
+                font-weight: 600;
+                gap: 8px;
             }
 
-            /* Tabela de Próximas Janelas */
-            .attic-table-container {
-                margin-top: 14px;
-                background: #191b2b;
-                border: 1px solid #2d3049;
+            /* Modais Suspensos (Popovers) */
+            .attic-hud-popover {
+                position: absolute;
+                top: calc(100% + 6px);
+                right: 0;
+                background: #171826;
+                border: 1px solid #383b58;
                 border-radius: 8px;
-                overflow: hidden;
+                padding: 14px;
+                box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5), 0 4px 10px rgba(0, 0, 0, 0.3);
+                z-index: 1000;
+                display: none;
+                width: 440px;
+                max-width: 95vw;
+                box-sizing: border-box;
+                color: #e2e8f0;
+                font-size: 12px;
             }
 
-            .attic-table-header {
+            .attic-hud-popover.open {
+                display: block;
+            }
+
+            .attic-popover-header {
                 display: flex;
                 align-items: center;
                 justify-content: space-between;
-                padding: 10px 14px;
-                background: #1e2033;
-                border-bottom: 1px solid #2d3049;
-            }
-
-            .attic-table-title {
-                font-size: 12px;
+                margin-bottom: 10px;
+                padding-bottom: 6px;
+                border-bottom: 1px solid #282a40;
                 font-weight: 700;
-                color: #cbd5e1;
+                font-size: 12px;
+                color: #f8fafc;
                 text-transform: uppercase;
                 letter-spacing: 0.5px;
             }
 
-            .attic-table {
+            .attic-popover-close {
+                background: none;
+                border: none;
+                color: #94a3b8;
+                cursor: pointer;
+                font-size: 15px;
+                font-weight: 700;
+                padding: 0 4px;
+            }
+
+            .attic-popover-close:hover {
+                color: #ffffff;
+            }
+
+            /* Tabela de Projeções no Popover */
+            .attic-pop-table {
                 width: 100%;
                 border-collapse: collapse;
-                font-size: 12px;
-            }
-
-            .attic-table th {
-                text-align: left;
-                padding: 8px 12px;
-                color: #64748b;
                 font-size: 11px;
-                font-weight: 600;
-                border-bottom: 1px solid #282a40;
-                background: #171827;
+                margin-bottom: 10px;
             }
 
-            .attic-table td {
-                padding: 7px 12px;
-                border-bottom: 1px solid #24263a;
-                color: #e2e8f0;
+            .attic-pop-table th {
+                text-align: left;
+                padding: 6px 8px;
+                background: #1f2133;
+                color: #94a3b8;
+                font-size: 10px;
+                border-bottom: 1px solid #2f324c;
             }
 
-            .attic-table tr:last-child td {
-                border-bottom: none;
+            .attic-pop-table td {
+                padding: 5px 8px;
+                border-bottom: 1px solid #222438;
             }
 
-            .attic-table tr.active-row {
-                background: rgba(99, 102, 241, 0.12);
+            .attic-pop-table tr.active-row {
+                background: rgba(99, 102, 241, 0.15);
                 font-weight: 600;
             }
 
             .attic-badge-current {
                 background: #4f46e5;
-                color: #ffffff;
-                font-size: 10px;
-                font-weight: 700;
-                padding: 2px 6px;
-                border-radius: 4px;
+                color: #fff;
+                font-size: 9px;
+                padding: 1px 4px;
+                border-radius: 3px;
                 text-transform: uppercase;
             }
 
-            /* Painel de Configurações Colapsável */
-            .attic-settings-drawer {
-                margin-top: 14px;
-                padding-top: 14px;
-                border-top: 1px solid #2e314b;
-                display: none;
-            }
-
-            .attic-settings-drawer.open {
-                display: block;
-            }
-
-            .attic-settings-grid {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-                gap: 12px;
-                margin-bottom: 12px;
-            }
-
-            .attic-setting-item {
+            /* Formulários & Configs no Popover */
+            .attic-setting-row {
+                margin-bottom: 10px;
                 display: flex;
                 flex-direction: column;
                 gap: 4px;
             }
 
-            .attic-setting-label {
+            .attic-setting-row label {
                 font-size: 11px;
                 color: #94a3b8;
                 font-weight: 600;
             }
 
-            .attic-select {
-                background: #141522;
-                border: 1px solid #333652;
-                color: #f8fafc;
-                border-radius: 6px;
-                padding: 6px 8px;
+            .attic-select, .attic-input {
+                background: #0f101b;
+                border: 1px solid #2d304a;
+                color: #f1f5f9;
+                border-radius: 5px;
+                padding: 5px 8px;
                 font-size: 12px;
                 outline: none;
+                width: 100%;
+                box-sizing: border-box;
             }
 
-            .attic-checkbox-row {
+            .attic-select:focus, .attic-input:focus {
+                border-color: #6366f1;
+            }
+
+            .attic-chk-label {
                 display: flex;
                 align-items: center;
-                gap: 8px;
-                font-size: 12px;
+                gap: 6px;
+                font-size: 11px;
                 color: #cbd5e1;
                 cursor: pointer;
-                user-select: none;
+                margin-top: 5px;
             }
 
-            .attic-checkbox-row input[type="checkbox"] {
-                cursor: pointer;
+            .attic-chk-label input {
                 accent-color: #6366f1;
-            }
-
-            .attic-collapsed-content {
-                display: none;
+                cursor: pointer;
             }
         `;
         document.head.appendChild(style);
     }
 
-    function createPanel() {
-        const panel = document.createElement('div');
-        panel.id = 'attic-tracker-panel';
+    function createHud() {
+        const wrapper = document.createElement('div');
+        wrapper.id = 'attic-hud-wrapper';
 
-        panel.innerHTML = `
-            <div class="attic-header">
-                <div class="attic-header-left">
-                    <span class="attic-title-badge">Sótão</span>
-                    <h2 class="attic-title">🏚️ Temporizador do Sótão Quase Abandonado</h2>
+        wrapper.innerHTML = `
+            <div id="attic-hud-bar">
+                <!-- Esquerda -->
+                <div class="attic-hud-left">
+                    <span class="attic-hud-badge">🏚️ Sótão</span>
+                    <div class="attic-hud-clocks">
+                        <span>NST: <strong id="hud-clock-nst">--:--:--</strong></span>
+                        <span id="hud-clock-local-row">Local: <strong id="hud-clock-local">--:--:--</strong></span>
+                    </div>
                 </div>
-                <div class="attic-header-actions">
-                    <button class="attic-btn-icon" id="attic-btn-toggle-settings" title="Configurações e Fusos">⚙️</button>
-                    <button class="attic-btn-icon" id="attic-btn-collapse" title="Minimizar / Expandir Painel">▼</button>
+
+                <!-- Centro -->
+                <div class="attic-hud-center">
+                    <div class="attic-hud-timer-pill attic-pill-nobase" id="hud-timer-pill">
+                        <span id="hud-timer-status-dot">⚪</span>
+                        <span id="hud-timer-digits">--:--</span>
+                    </div>
+                    <div class="attic-hud-next-info" id="hud-next-info">
+                        Aguardando último restock...
+                    </div>
+                </div>
+
+                <!-- Direita -->
+                <div class="attic-hud-right">
+                    <button class="attic-hud-btn attic-hud-btn-primary" id="hud-btn-stocked-now" title="Define agora como momento exato do restock">
+                        ⚡ Restocou!
+                    </button>
+                    <button class="attic-hud-btn" id="hud-btn-skip-cycle" title="Não veio item nesta janela? Avança para o próximo ciclo de +7m">
+                        ⏩ +7m
+                    </button>
+                    <button class="attic-hud-btn attic-hud-btn-icon" id="hud-btn-open-manual" title="Inserir horário manual em NST">
+                        ✏️
+                    </button>
+                    <button class="attic-hud-btn attic-hud-btn-icon" id="hud-btn-open-projections" title="Ver tabela de próximas janelas">
+                        📅
+                    </button>
+                    <button class="attic-hud-btn attic-hud-btn-icon" id="hud-btn-open-settings" title="Configurações e fuso horário">
+                        ⚙️
+                    </button>
                 </div>
             </div>
 
-            <!-- Banner de Detecção Automática (oculto por padrão) -->
-            <div id="attic-detection-banner" class="attic-detection-alert" style="display: none;">
-                <div class="attic-detection-alert-text">
-                    <span>🎉</span>
-                    <span id="attic-detection-text">Itens detectados no Sótão!</span>
+            <!-- Alerta Compacto de Estoque Detectado -->
+            <div id="attic-hud-stock-alert">
+                <span id="hud-stock-alert-text">🎉 <strong>Itens detectados no Sótão!</strong></span>
+                <div style="display: flex; gap: 6px;">
+                    <button class="attic-hud-btn attic-hud-btn-primary" id="hud-btn-confirm-stock" style="padding: 2px 8px; font-size: 11px;">
+                        ✅ Atualizar Restock para Agora
+                    </button>
+                    <button class="attic-popover-close" id="hud-btn-dismiss-stock" title="Fechar">✕</button>
                 </div>
-                <button class="attic-btn attic-btn-primary" id="attic-btn-confirm-detection">
-                    ✅ Marcar Restock Agora
-                </button>
             </div>
 
-            <div id="attic-body-content">
-                <!-- Relógios e Informações de Fuso -->
-                <div class="attic-clocks-bar">
-                    <div class="attic-clock-item">
-                        <span class="attic-clock-label">Neopian Standard Time (NST)</span>
-                        <span class="attic-clock-val" id="attic-clock-nst">--:--:--</span>
-                    </div>
-                    <div class="attic-clock-item" style="text-align: right;">
-                        <span class="attic-clock-label" id="attic-local-tz-label">Horário de Brasília</span>
-                        <span class="attic-clock-val" id="attic-clock-local">--:--:--</span>
+            <!-- Popover 1: Entrada Manual -->
+            <div class="attic-hud-popover" id="popover-manual" style="width: 300px;">
+                <div class="attic-popover-header">
+                    <span>✏️ Definir Último Restock</span>
+                    <button class="attic-popover-close" data-close="popover-manual">✕</button>
+                </div>
+                <div class="attic-setting-row">
+                    <label>Horário em NST (ex: 14:22:15 ou 2:22 pm):</label>
+                    <div style="display: flex; gap: 6px;">
+                        <input type="text" class="attic-input" id="pop-input-manual" placeholder="HH:MM:SS" />
+                        <button class="attic-hud-btn attic-hud-btn-primary" id="pop-btn-save-manual">Salvar</button>
                     </div>
                 </div>
+                <div style="font-size: 11px; color: #94a3b8; margin-top: 4px;" id="pop-current-base-desc">
+                    Último cadastrado: Nenhum
+                </div>
+            </div>
 
-                <div class="attic-main-grid">
-                    <!-- Cartão do Timer -->
-                    <div class="attic-card">
-                        <div class="attic-timer-display">
-                            <div class="attic-timer-status status-nobase" id="attic-status-text">SEM REGISTRO</div>
-                            <div class="attic-timer-digits status-nobase" id="attic-timer-digits">--:--</div>
-                            <div class="attic-timer-sub" id="attic-timer-sub">Informe o último restock abaixo para iniciar</div>
-                        </div>
-                        <div class="attic-actions-row">
-                            <button class="attic-btn attic-btn-primary" id="attic-btn-stocked-now" title="Registra o segundo exato de agora como momento de restock">
-                                ⚡ Restocou Agora!
-                            </button>
-                            <button class="attic-btn attic-btn-skip" id="attic-btn-skip-cycle" title="Se passou da janela e você não viu nenhum item, avança +7m">
-                                ⏩ Não Restocou (+7m)
-                            </button>
-                        </div>
-                    </div>
+            <!-- Popover 2: Tabela de Projeções -->
+            <div class="attic-hud-popover" id="popover-projections">
+                <div class="attic-popover-header">
+                    <span>📅 Próximas Janelas Projetadas</span>
+                    <button class="attic-popover-close" data-close="popover-projections">✕</button>
+                </div>
+                <table class="attic-pop-table">
+                    <thead>
+                        <tr>
+                            <th>Ciclo</th>
+                            <th>Janela NST</th>
+                            <th id="pop-th-local-tz">Horário Brasília</th>
+                            <th>Drift</th>
+                        </tr>
+                    </thead>
+                    <tbody id="pop-projections-tbody">
+                        <tr><td colspan="4" style="text-align: center; color: #64748b; padding: 10px;">Defina o último restock para calcular.</td></tr>
+                    </tbody>
+                </table>
+                <div style="display: flex; justify-content: flex-end;">
+                    <button class="attic-hud-btn" id="pop-btn-copy-projections">
+                        📋 Copiar para Discord / Fórum
+                    </button>
+                </div>
+            </div>
 
-                    <!-- Cartão de Ações & Input Manual -->
-                    <div class="attic-card">
-                        <div>
-                            <div style="font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase; margin-bottom: 6px;">
-                                Último Restock Conhecido
-                            </div>
-                            <div style="font-size: 14px; font-weight: 700; color: #f1f5f9;" id="attic-last-restock-display">
-                                Nenhum informado
-                            </div>
-                            <div style="font-size: 11px; color: #64748b; margin-top: 2px;" id="attic-last-restock-local">
-                                Defina abaixo via NST
-                            </div>
-                        </div>
-
-                        <div style="margin-top: 12px;">
-                            <label style="font-size: 11px; color: #94a3b8; font-weight: 600; display: block; margin-bottom: 4px;">
-                                Inserir Horário Manual (NST):
-                            </label>
-                            <div class="attic-manual-box">
-                                <input type="text" class="attic-input" id="attic-input-manual" placeholder="Ex: 14:22:15 ou 2:22 pm" />
-                                <button class="attic-btn attic-btn-secondary" id="attic-btn-save-manual">Salvar</button>
-                            </div>
-                        </div>
+            <!-- Popover 3: Configurações -->
+            <div class="attic-hud-popover" id="popover-settings" style="width: 320px;">
+                <div class="attic-popover-header">
+                    <span>⚙️ Configurações</span>
+                    <button class="attic-popover-close" data-close="popover-settings">✕</button>
+                </div>
+                <div class="attic-setting-row">
+                    <label>Seu Fuso Horário Local:</label>
+                    <select class="attic-select" id="pop-select-tz"></select>
+                </div>
+                <div class="attic-setting-row">
+                    <label>Volume do Alerta Sonoro:</label>
+                    <div style="display: flex; gap: 6px; align-items: center;">
+                        <input type="range" id="pop-range-volume" min="0" max="1" step="0.05" style="flex: 1; accent-color: #6366f1;">
+                        <button class="attic-hud-btn" id="pop-btn-test-sound" style="padding: 2px 6px;">Testar 🔔</button>
                     </div>
                 </div>
-
-                <!-- Tabela de Próximas Janelas de Restock -->
-                <div class="attic-table-container">
-                    <div class="attic-table-header">
-                        <span class="attic-table-title">📅 Próximas Janelas Projetadas (+7m a cada ciclo)</span>
-                        <button class="attic-btn" id="attic-btn-copy-projections" style="padding: 4px 10px; font-size: 11px;">
-                            📋 Copiar para Discord
-                        </button>
-                    </div>
-                    <table class="attic-table">
-                        <thead>
-                            <tr>
-                                <th>Ciclo</th>
-                                <th>Janela NST</th>
-                                <th id="attic-th-local-tz">Horário Brasília</th>
-                                <th>Drift Acumulado</th>
-                                <th>Status / Restante</th>
-                            </tr>
-                        </thead>
-                        <tbody id="attic-projections-tbody">
-                            <tr>
-                                <td colspan="5" style="text-align: center; color: #64748b; padding: 14px;">
-                                    Defina o último restock acima para gerar as projeções.
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
+                <div class="attic-setting-row">
+                    <label>Tolerância Pós-Janela (Overtime):</label>
+                    <select class="attic-select" id="pop-select-overtime">
+                        <option value="15">15 segundos</option>
+                        <option value="30">30 segundos (Recomendado)</option>
+                        <option value="45">45 segundos</option>
+                        <option value="60">60 segundos (1 minuto)</option>
+                    </select>
                 </div>
-
-                <!-- Painel de Configurações Colapsável -->
-                <div class="attic-settings-drawer" id="attic-settings-drawer">
-                    <div style="font-size: 12px; font-weight: 700; color: #cbd5e1; text-transform: uppercase; margin-bottom: 10px;">
-                        ⚙️ Ajustes e Preferências
-                    </div>
-                    <div class="attic-settings-grid">
-                        <div class="attic-setting-item">
-                            <label class="attic-setting-label">Seu Fuso Horário Local:</label>
-                            <select class="attic-select" id="attic-select-tz"></select>
-                        </div>
-                        <div class="attic-setting-item">
-                            <label class="attic-setting-label">Volume do Alerta Sonoro:</label>
-                            <div style="display: flex; gap: 8px; align-items: center;">
-                                <input type="range" id="attic-range-volume" min="0" max="1" step="0.05" value="0.35" style="flex: 1; accent-color: #6366f1;">
-                                <button class="attic-btn" id="attic-btn-test-sound" style="padding: 4px 8px; font-size: 11px;">Testar 🔔</button>
-                            </div>
-                        </div>
-                        <div class="attic-setting-item">
-                            <label class="attic-setting-label">Tolerância Pós-Janela (Overtime):</label>
-                            <select class="attic-select" id="attic-select-overtime">
-                                <option value="15">15 segundos</option>
-                                <option value="30">30 segundos (Recomendado)</option>
-                                <option value="45">45 segundos</option>
-                                <option value="60">60 segundos (1 minuto)</option>
-                            </select>
-                        </div>
-                    </div>
-
-                    <div style="display: flex; flex-wrap: wrap; gap: 16px; margin-top: 10px;">
-                        <label class="attic-checkbox-row">
-                            <input type="checkbox" id="attic-chk-sound-enabled">
-                            Alertas Sonoros Ativos
-                        </label>
-                        <label class="attic-checkbox-row">
-                            <input type="checkbox" id="attic-chk-alert-30s">
-                            Avisar 30s antes
-                        </label>
-                        <label class="attic-checkbox-row">
-                            <input type="checkbox" id="attic-chk-alert-10s">
-                            Avisar 10s antes
-                        </label>
-                        <label class="attic-checkbox-row">
-                            <input type="checkbox" id="attic-chk-alert-window">
-                            Avisar ao abrir janela (0s)
-                        </label>
-                        <label class="attic-checkbox-row">
-                            <input type="checkbox" id="attic-chk-title-countdown">
-                            Timer no título da aba
-                        </label>
-                    </div>
+                <div style="margin-top: 8px;">
+                    <label class="attic-chk-label">
+                        <input type="checkbox" id="pop-chk-sound">
+                        Alertas Sonoros Ativos
+                    </label>
+                    <label class="attic-chk-label">
+                        <input type="checkbox" id="pop-chk-30s">
+                        Bip aos 30s antes da janela
+                    </label>
+                    <label class="attic-chk-label">
+                        <input type="checkbox" id="pop-chk-10s">
+                        Bip aos 10s antes da janela
+                    </label>
+                    <label class="attic-chk-label">
+                        <input type="checkbox" id="pop-chk-window">
+                        Arpejo ao abrir janela (0s)
+                    </label>
+                    <label class="attic-chk-label">
+                        <input type="checkbox" id="pop-chk-title">
+                        Contador no título da aba
+                    </label>
                 </div>
             </div>
         `;
 
-        return panel;
+        return wrapper;
     }
 
-    function populateTimezoneOptions(selectEl) {
+    function populateTimezones(selectEl) {
         selectEl.innerHTML = '';
         COMMON_TIMEZONES.forEach(tz => {
             const opt = document.createElement('option');
             opt.value = tz.value;
             opt.textContent = tz.label;
-            if (config.timezone === tz.value) {
-                opt.selected = true;
-            }
+            if (config.timezone === tz.value) opt.selected = true;
             selectEl.appendChild(opt);
         });
     }
 
+    function closeAllPopovers() {
+        document.querySelectorAll('.attic-hud-popover').forEach(p => p.classList.remove('open'));
+    }
+
+    function togglePopover(popoverId) {
+        const target = document.getElementById(popoverId);
+        if (!target) return;
+        const isOpen = target.classList.contains('open');
+        closeAllPopovers();
+        if (!isOpen) {
+            target.classList.add('open');
+        }
+    }
+
     // =========================================================================
-    // ATUALIZAÇÃO DO TIMER & LÓGICA EM TEMPO REAL (LOOP A CADA SEGUNDO)
+    // LOOP PRINCIPAL DE ATUALIZAÇÃO
     // =========================================================================
 
     function updateUiTick() {
         const nowMs = getCorrectedNow();
         const userTz = resolveUserTimezone();
 
-        // 1. Atualiza os relógios de topo
+        // 1. Relógios de Topo
         const nstStr = formatTimeInZone(nowMs, NST_TIMEZONE, true);
         const localStr = formatTimeInZone(nowMs, userTz, true);
 
-        if (uiElements.clockNst) uiElements.clockNst.textContent = `${nstStr} NST`;
+        if (uiElements.clockNst) uiElements.clockNst.textContent = nstStr;
         if (uiElements.clockLocal) uiElements.clockLocal.textContent = localStr;
 
-        // 2. Calcula as janelas
+        // 2. Cálculos
         const calc = calculateAtticWindows(nowMs);
 
-        // 3. Atualiza o display do último restock registrado
-        if (config.lastRestockTimestamp) {
-            const lrNst = formatTimeInZone(config.lastRestockTimestamp, NST_TIMEZONE, true);
-            const lrLocal = formatTimeInZone(config.lastRestockTimestamp, userTz, true);
-            if (uiElements.lastRestockDisplay) {
-                uiElements.lastRestockDisplay.textContent = `${lrNst} NST`;
+        // 3. Atualização do Popover Manual
+        if (uiElements.currentBaseDesc) {
+            if (config.lastRestockTimestamp) {
+                const lrNst = formatTimeInZone(config.lastRestockTimestamp, NST_TIMEZONE, true);
+                const lrLocal = formatTimeInZone(config.lastRestockTimestamp, userTz, true);
+                uiElements.currentBaseDesc.innerHTML = `Último restock: <strong>${lrNst} NST</strong> (${lrLocal} Local)`;
+            } else {
+                uiElements.currentBaseDesc.textContent = 'Nenhum restock cadastrado ainda.';
             }
-            if (uiElements.lastRestockLocal) {
-                uiElements.lastRestockLocal.textContent = `Horário Local: ${lrLocal}`;
-            }
-        } else {
-            if (uiElements.lastRestockDisplay) uiElements.lastRestockDisplay.textContent = 'Nenhum informado';
-            if (uiElements.lastRestockLocal) uiElements.lastRestockLocal.textContent = 'Clique em "Restocou Agora" ou digite o horário';
         }
 
-        // 4. Se não tem base cadastrada
+        // 4. Sem Base
         if (!calc.hasBase) {
-            if (uiElements.statusText) {
-                uiElements.statusText.textContent = 'SEM REGISTRO';
-                uiElements.statusText.className = 'attic-timer-status status-nobase';
+            if (uiElements.timerPill) {
+                uiElements.timerPill.className = 'attic-hud-timer-pill attic-pill-nobase';
             }
-            if (uiElements.timerDigits) {
-                uiElements.timerDigits.textContent = '--:--';
-                uiElements.timerDigits.className = 'attic-timer-digits status-nobase';
-            }
-            if (uiElements.timerSub) {
-                uiElements.timerSub.textContent = 'Aguardando primeiro restock para iniciar os cálculos';
+            if (uiElements.timerDigits) uiElements.timerDigits.textContent = '--:--';
+            if (uiElements.timerDot) uiElements.timerDot.textContent = '⚪';
+            if (uiElements.nextInfo) {
+                uiElements.nextInfo.innerHTML = 'Aguardando último restock. Clique em <strong>⚡ Restocou!</strong> ou <strong>✏️</strong>';
             }
             if (config.tabTitleCountdown) {
                 document.title = originalDocumentTitle;
@@ -1094,41 +952,38 @@
         const cycle = calc.currentCycle;
         const remainingMs = cycle.timeRemainingMs;
         const cycleNum = cycle.cycleNumber;
+        const remainingSec = Math.ceil(remainingMs / 1000);
 
-        // Reset dos flags de som caso tenha mudado de ciclo
         if (lastPlayedSoundCycle !== cycleNum) {
             lastPlayedSoundCycle = cycleNum;
             playedSoundFlags = { '30s': false, '10s': false, 'window': false };
         }
 
-        // 5. Atualização visual do status e timer
+        const startNst = formatTimeInZone(cycle.startTimestamp, NST_TIMEZONE, true);
+        const endNst = formatTimeInZone(cycle.endTimestamp, NST_TIMEZONE, true);
+        const startLocal = formatTimeInZone(cycle.startTimestamp, userTz, true);
+
+        // 5. Atualização visual por status
         if (calc.activeStatus === 'WAITING' || calc.activeStatus === 'ATTENTION' || calc.activeStatus === 'IMMINENT') {
-            const remainingSec = Math.ceil(remainingMs / 1000);
-            let statusLabel = `CICLO #${cycleNum} • AGUARDANDO`;
-            let statusClass = 'status-waiting';
+            let pillClass = 'attic-pill-waiting';
+            let dot = '🟢';
 
             if (calc.activeStatus === 'ATTENTION') {
-                statusLabel = `CICLO #${cycleNum} • ATENÇÃO (QUASE LÁ)`;
-                statusClass = 'status-attention';
+                pillClass = 'attic-pill-attention';
+                dot = '🟡';
             } else if (calc.activeStatus === 'IMMINENT') {
-                statusLabel = `CICLO #${cycleNum} • IMINENTE! PREPARE-SE`;
-                statusClass = 'status-imminent';
+                pillClass = 'attic-pill-imminent';
+                dot = '🟠';
             }
 
-            if (uiElements.statusText) {
-                uiElements.statusText.textContent = statusLabel;
-                uiElements.statusText.className = `attic-timer-status ${statusClass}`;
-            }
-            if (uiElements.timerDigits) {
-                uiElements.timerDigits.textContent = formatDuration(remainingMs);
-                uiElements.timerDigits.className = `attic-timer-digits ${statusClass}`;
-            }
-            if (uiElements.timerSub) {
-                const startNst = formatTimeInZone(cycle.startTimestamp, NST_TIMEZONE, true);
-                uiElements.timerSub.textContent = `Abertura prevista às ${startNst} NST (+${cycle.driftSeconds}s de drift)`;
+            if (uiElements.timerPill) uiElements.timerPill.className = `attic-hud-timer-pill ${pillClass}`;
+            if (uiElements.timerDot) uiElements.timerDot.textContent = dot;
+            if (uiElements.timerDigits) uiElements.timerDigits.textContent = formatDuration(remainingMs);
+
+            if (uiElements.nextInfo) {
+                uiElements.nextInfo.innerHTML = `Ciclo #${cycleNum} abre às <span>${startNst} NST</span> (${startLocal}) [drift +${cycle.driftSeconds}s]`;
             }
 
-            // Título da aba
             if (config.tabTitleCountdown) {
                 document.title = `(${formatDuration(remainingMs)}) Sótão Quase Abandonado`;
             }
@@ -1147,32 +1002,24 @@
                 playSoundAlert('window');
             }
 
-            if (uiElements.statusText) {
-                uiElements.statusText.textContent = `🚨 CICLO #${cycleNum} • JANELA ATIVA! REFRESH NOW!`;
-                uiElements.statusText.className = 'attic-timer-status status-active';
-            }
-            if (uiElements.timerDigits) {
-                uiElements.timerDigits.textContent = formatDuration(remainingMs);
-                uiElements.timerDigits.className = 'attic-timer-digits status-active';
-            }
-            if (uiElements.timerSub) {
-                uiElements.timerSub.textContent = `Janela aberta! Dê refresh na página (F5) para checar o estoque!`;
+            if (uiElements.timerPill) uiElements.timerPill.className = 'attic-hud-timer-pill attic-pill-active';
+            if (uiElements.timerDot) uiElements.timerDot.textContent = '🚨';
+            if (uiElements.timerDigits) uiElements.timerDigits.textContent = `REFRESH! (${formatDuration(remainingMs)})`;
+
+            if (uiElements.nextInfo) {
+                uiElements.nextInfo.innerHTML = `<strong>JANELA ATIVA!</strong> ${startNst} ~ ${endNst} NST. Atualize a página!`;
             }
 
             if (config.tabTitleCountdown) {
                 document.title = `🔴 REFRESH NOW! (${formatDuration(remainingMs)}) Sótão`;
             }
         } else if (calc.activeStatus === 'OVERTIME') {
-            if (uiElements.statusText) {
-                uiElements.statusText.textContent = `⏳ CICLO #${cycleNum} • PRORROGAÇÃO`;
-                uiElements.statusText.className = 'attic-timer-status status-overtime';
-            }
-            if (uiElements.timerDigits) {
-                uiElements.timerDigits.textContent = formatDuration(remainingMs);
-                uiElements.timerDigits.className = 'attic-timer-digits status-overtime';
-            }
-            if (uiElements.timerSub) {
-                uiElements.timerSub.textContent = `Janela oficial encerrou, checando possíveis atrasos do servidor`;
+            if (uiElements.timerPill) uiElements.timerPill.className = 'attic-hud-timer-pill attic-pill-overtime';
+            if (uiElements.timerDot) uiElements.timerDot.textContent = '⏳';
+            if (uiElements.timerDigits) uiElements.timerDigits.textContent = `+${formatDuration(remainingMs)}`;
+
+            if (uiElements.nextInfo) {
+                uiElements.nextInfo.innerHTML = `Prorrogação de refresh (+${config.overtimeSeconds}s). Checando atrasos...`;
             }
 
             if (config.tabTitleCountdown) {
@@ -1180,45 +1027,38 @@
             }
         }
 
-        // 6. Atualização da tabela de projeções (apenas a cada 1 segundo se tiver dados)
         renderProjectionsTable(calc.upcomingCycles, userTz);
     }
 
     function renderProjectionsTable(upcomingCycles, userTz) {
-        if (!uiElements.projectionsTbody || !upcomingCycles || upcomingCycles.length === 0) return;
+        if (!uiElements.popProjectionsTbody || !upcomingCycles || upcomingCycles.length === 0) return;
 
-        const rowsHtml = upcomingCycles.map((cycle, index) => {
+        const rowsHtml = upcomingCycles.map((cycle) => {
             const startNst = formatTimeInZone(cycle.startTimestamp, NST_TIMEZONE, true);
             const endNst = formatTimeInZone(cycle.endTimestamp, NST_TIMEZONE, true);
-
             const startLocal = formatTimeInZone(cycle.startTimestamp, userTz, true);
             const endLocal = formatTimeInZone(cycle.endTimestamp, userTz, true);
 
             const isCurrent = cycle.isCurrent;
             const rowClass = isCurrent ? 'class="active-row"' : '';
-            const badge = isCurrent ? '<span class="attic-badge-current">Atual</span>' : `+${(index) * 7}m`;
+            const badge = isCurrent ? '<span class="attic-badge-current">Atual</span>' : '';
 
             return `
                 <tr ${rowClass}>
-                    <td><strong>#${cycle.cycleNumber}</strong> ${isCurrent ? badge : ''}</td>
+                    <td><strong>#${cycle.cycleNumber}</strong> ${badge}</td>
                     <td><code>${startNst} ~ ${endNst}</code></td>
                     <td><code>${startLocal} ~ ${endLocal}</code></td>
                     <td>+${cycle.driftSeconds}s</td>
-                    <td>${isCurrent ? '<strong>Janela em foco</strong>' : 'Projetado'}</td>
                 </tr>
             `;
         }).join('');
 
-        uiElements.projectionsTbody.innerHTML = rowsHtml;
+        uiElements.popProjectionsTbody.innerHTML = rowsHtml;
     }
-
-    // =========================================================================
-    // COMPARTILHAMENTO DE PROJEÇÕES (DISCORD / FÓRUM)
-    // =========================================================================
 
     function copyProjectionsToClipboard() {
         if (!config.lastRestockTimestamp) {
-            alert('Defina primeiro o horário do último restock para copiar as projeções!');
+            alert('Defina primeiro o horário do último restock!');
             return;
         }
 
@@ -1249,7 +1089,7 @@
 
         const text = lines.join('\n');
         navigator.clipboard.writeText(text).then(() => {
-            const btn = document.getElementById('attic-btn-copy-projections');
+            const btn = document.getElementById('pop-btn-copy-projections');
             if (btn) {
                 const originalText = btn.textContent;
                 btn.textContent = '✅ Copiado!';
@@ -1257,48 +1097,52 @@
             }
         }).catch(err => {
             console.error('Erro ao copiar para clipboard:', err);
-            alert('Não foi possível copiar automaticamente para a área de transferência.');
+            alert('Não foi possível copiar para a área de transferência.');
         });
     }
 
     // =========================================================================
-    // INICIALIZAÇÃO E BINDING DE EVENTOS
+    // INICIALIZAÇÃO
     // =========================================================================
 
     function init() {
         injectStyles();
         detectServerNstTime();
 
-        const panel = createPanel();
+        const hud = createHud();
 
-        // Inserção do painel na página do Sótão
-        // Procura locais clássicos de inserção para garantir máxima compatibilidade
-        const targetContainer = document.querySelector('td.content, .contentModule, #content, center, table[width="100%"]');
-        if (targetContainer) {
-            targetContainer.parentNode.insertBefore(panel, targetContainer);
+        // Inserção precisa:
+        // No Attic, o conteúdo principal é td.content. Inserir como primeiro filho de td.content
+        // garante que a barra fique no topo absoluto da área útil, BEM ACIMA de qualquer item!
+        const contentTd = document.querySelector('td.content');
+        if (contentTd) {
+            contentTd.insertBefore(hud, contentTd.firstChild);
         } else {
-            document.body.insertBefore(panel, document.body.firstChild);
+            const fallbackContainer = document.querySelector('#content, center, table[width="100%"]');
+            if (fallbackContainer) {
+                fallbackContainer.parentNode.insertBefore(hud, fallbackContainer);
+            } else {
+                document.body.insertBefore(hud, document.body.firstChild);
+            }
         }
 
-        // Cache de referências de DOM
+        // Cache de elementos de DOM
         uiElements = {
-            panel,
-            clockNst: document.getElementById('attic-clock-nst'),
-            clockLocal: document.getElementById('attic-clock-local'),
-            localTzLabel: document.getElementById('attic-local-tz-label'),
-            statusText: document.getElementById('attic-status-text'),
-            timerDigits: document.getElementById('attic-timer-digits'),
-            timerSub: document.getElementById('attic-timer-sub'),
-            lastRestockDisplay: document.getElementById('attic-last-restock-display'),
-            lastRestockLocal: document.getElementById('attic-last-restock-local'),
-            projectionsTbody: document.getElementById('attic-projections-tbody'),
-            thLocalTz: document.getElementById('attic-th-local-tz')
+            clockNst: document.getElementById('hud-clock-nst'),
+            clockLocal: document.getElementById('hud-clock-local'),
+            timerPill: document.getElementById('hud-timer-pill'),
+            timerDot: document.getElementById('hud-timer-status-dot'),
+            timerDigits: document.getElementById('hud-timer-digits'),
+            nextInfo: document.getElementById('hud-next-info'),
+            popProjectionsTbody: document.getElementById('pop-projections-tbody'),
+            thLocalTz: document.getElementById('pop-th-local-tz'),
+            currentBaseDesc: document.getElementById('pop-current-base-desc')
         };
 
-        // Popula fusos horários
-        const selectTz = document.getElementById('attic-select-tz');
+        // Popula fusos
+        const selectTz = document.getElementById('pop-select-tz');
         if (selectTz) {
-            populateTimezoneOptions(selectTz);
+            populateTimezones(selectTz);
             selectTz.addEventListener('change', (e) => {
                 config.timezone = e.target.value;
                 saveConfig(config);
@@ -1307,14 +1151,44 @@
             });
         }
 
-        // Configurações e Checkboxes
-        const chkSound = document.getElementById('attic-chk-sound-enabled');
-        const chk30s = document.getElementById('attic-chk-alert-30s');
-        const chk10s = document.getElementById('attic-chk-alert-10s');
-        const chkWindow = document.getElementById('attic-chk-alert-window');
-        const chkTitle = document.getElementById('attic-chk-title-countdown');
-        const rangeVol = document.getElementById('attic-range-volume');
-        const selOvertime = document.getElementById('attic-select-overtime');
+        // Eventos dos botões de abrir popovers
+        document.getElementById('hud-btn-open-manual')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            togglePopover('popover-manual');
+        });
+
+        document.getElementById('hud-btn-open-projections')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            togglePopover('popover-projections');
+        });
+
+        document.getElementById('hud-btn-open-settings')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            togglePopover('popover-settings');
+        });
+
+        // Fechar popovers ao clicar nos botões '✕' ou fora
+        document.querySelectorAll('.attic-popover-close').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                closeAllPopovers();
+            });
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.attic-hud-popover') && !e.target.closest('.attic-hud-btn')) {
+                closeAllPopovers();
+            }
+        });
+
+        // Checkboxes & Ajustes
+        const chkSound = document.getElementById('pop-chk-sound');
+        const chk30s = document.getElementById('pop-chk-30s');
+        const chk10s = document.getElementById('pop-chk-10s');
+        const chkWindow = document.getElementById('pop-chk-window');
+        const chkTitle = document.getElementById('pop-chk-title');
+        const rangeVol = document.getElementById('pop-range-volume');
+        const selOvertime = document.getElementById('pop-select-overtime');
 
         if (chkSound) {
             chkSound.checked = config.soundEnabled;
@@ -1376,113 +1250,66 @@
             });
         }
 
-        // Botão Testar Som
-        const btnTestSound = document.getElementById('attic-btn-test-sound');
-        if (btnTestSound) {
-            btnTestSound.addEventListener('click', () => {
-                playSoundAlert('test');
-            });
-        }
+        document.getElementById('pop-btn-test-sound')?.addEventListener('click', () => {
+            playSoundAlert('test');
+        });
 
-        // Toggle do Drawer de Configurações
-        const btnToggleSettings = document.getElementById('attic-btn-toggle-settings');
-        const drawerSettings = document.getElementById('attic-settings-drawer');
-        if (btnToggleSettings && drawerSettings) {
-            btnToggleSettings.addEventListener('click', () => {
-                drawerSettings.classList.toggle('open');
-            });
-        }
+        // Ações da Barra: Restocou Agora!
+        document.getElementById('hud-btn-stocked-now')?.addEventListener('click', () => {
+            const now = getCorrectedNow();
+            config.lastRestockTimestamp = now;
+            saveConfig(config);
+            updateUiTick();
+        });
 
-        // Minimizar / Expandir Painel
-        const btnCollapse = document.getElementById('attic-btn-collapse');
-        const bodyContent = document.getElementById('attic-body-content');
-        if (btnCollapse && bodyContent) {
-            if (config.panelCollapsed) {
-                bodyContent.style.display = 'none';
-                btnCollapse.textContent = '▲';
+        // Ação: Pular Ciclo (+7m)
+        document.getElementById('hud-btn-skip-cycle')?.addEventListener('click', () => {
+            if (!config.lastRestockTimestamp) return;
+            const now = getCorrectedNow();
+            const calc = calculateAtticWindows(now);
+            if (calc.currentCycle) {
+                const currentCycleEnd = calc.currentCycle.endTimestamp;
+                if (now < currentCycleEnd) {
+                    config.lastRestockTimestamp -= RESTOCK_CYCLE_MS;
+                }
+                saveConfig(config);
+                updateUiTick();
             }
-            btnCollapse.addEventListener('click', () => {
-                config.panelCollapsed = !config.panelCollapsed;
-                bodyContent.style.display = config.panelCollapsed ? 'none' : 'block';
-                btnCollapse.textContent = config.panelCollapsed ? '▲' : '▼';
-                saveConfig(config);
-            });
-        }
+        });
 
-        // Ação: Restocou Agora!
-        const btnStockedNow = document.getElementById('attic-btn-stocked-now');
-        if (btnStockedNow) {
-            btnStockedNow.addEventListener('click', () => {
-                const now = getCorrectedNow();
-                config.lastRestockTimestamp = now;
-                saveConfig(config);
-                updateUiTick();
-                alert(`Horário de Restock registrado: ${formatTimeInZone(now, NST_TIMEZONE, true)} NST!`);
-            });
-        }
+        // Ação: Salvar Manual
+        const inputManual = document.getElementById('pop-input-manual');
+        const btnSaveManual = document.getElementById('pop-btn-save-manual');
+        const handleManualSave = () => {
+            if (!inputManual) return;
+            const text = inputManual.value.trim();
+            const ts = parseNstInputToTimestamp(text);
+            if (!ts) {
+                alert('Formato inválido! Digite HH:MM:SS ou HH:MM (ex: 14:22:15 ou 2:22 pm).');
+                return;
+            }
+            config.lastRestockTimestamp = ts;
+            saveConfig(config);
+            inputManual.value = '';
+            closeAllPopovers();
+            updateUiTick();
+        };
 
-        // Ação: Não Restocou (+7m) / Avançar Ciclo
-        const btnSkipCycle = document.getElementById('attic-btn-skip-cycle');
-        if (btnSkipCycle) {
-            btnSkipCycle.addEventListener('click', () => {
-                if (!config.lastRestockTimestamp) {
-                    alert('Defina primeiro um horário de restock base.');
-                    return;
-                }
-                const now = getCorrectedNow();
-                const calc = calculateAtticWindows(now);
-                if (calc.currentCycle) {
-                    // Pula forçando a base ou avançando para a próxima janela esperada
-                    const currentCycleEnd = calc.currentCycle.endTimestamp;
-                    if (now < currentCycleEnd) {
-                        // Se clicou antes do fim do ciclo atual, retroage a base fictícia em 7m para simular avanço
-                        config.lastRestockTimestamp -= RESTOCK_CYCLE_MS;
-                    } else {
-                        // Se já passou, o cálculo natural já avança
-                    }
-                    saveConfig(config);
-                    updateUiTick();
-                }
-            });
-        }
+        btnSaveManual?.addEventListener('click', handleManualSave);
+        inputManual?.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') handleManualSave();
+        });
 
-        // Ação: Salvar Horário Manual
-        const btnSaveManual = document.getElementById('attic-btn-save-manual');
-        const inputManual = document.getElementById('attic-input-manual');
-        if (btnSaveManual && inputManual) {
-            const handleSaveManual = () => {
-                const text = inputManual.value.trim();
-                const ts = parseNstInputToTimestamp(text);
-                if (!ts) {
-                    alert('Formato de horário inválido! Use HH:MM:SS ou HH:MM (ex: 14:22:15 ou 2:22 pm).');
-                    return;
-                }
-                config.lastRestockTimestamp = ts;
-                saveConfig(config);
-                inputManual.value = '';
-                updateUiTick();
-                alert(`Horário registrado com sucesso: ${formatTimeInZone(ts, NST_TIMEZONE, true)} NST.`);
-            };
+        // Copiar Projeções
+        document.getElementById('pop-btn-copy-projections')?.addEventListener('click', copyProjectionsToClipboard);
 
-            btnSaveManual.addEventListener('click', handleSaveManual);
-            inputManual.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') handleSaveManual();
-            });
-        }
-
-        // Copiar projeções
-        const btnCopyProjections = document.getElementById('attic-btn-copy-projections');
-        if (btnCopyProjections) {
-            btnCopyProjections.addEventListener('click', copyProjectionsToClipboard);
-        }
-
-        // Checagem de Restock ao carregar a página
+        // Detecção de Estoque
         checkStockOnPageLoad();
 
-        // Atualiza rótulos de fusos
+        // Rótulos de fusos
         updateTzLabels();
 
-        // Tick inicial e loop a cada 1 segundo
+        // Loop a cada 1 segundo
         updateUiTick();
         setInterval(updateUiTick, 1000);
     }
@@ -1496,31 +1323,39 @@
             tzName = userTz.split('/')[1].replace(/_/g, ' ');
         }
 
-        if (uiElements.localTzLabel) uiElements.localTzLabel.textContent = tzName;
+        const rowLabel = document.getElementById('hud-clock-local-row');
+        if (rowLabel) {
+            rowLabel.innerHTML = `${tzName}: <strong id="hud-clock-local">--:--:--</strong>`;
+            uiElements.clockLocal = document.getElementById('hud-clock-local');
+        }
         if (uiElements.thLocalTz) uiElements.thLocalTz.textContent = tzName;
     }
 
     function checkStockOnPageLoad() {
         const detection = detectAtticStockOnPage();
-        const banner = document.getElementById('attic-detection-banner');
-        const bannerText = document.getElementById('attic-detection-text');
-        const btnConfirm = document.getElementById('attic-btn-confirm-detection');
+        const alertBox = document.getElementById('attic-hud-stock-alert');
+        const alertText = document.getElementById('hud-stock-alert-text');
+        const btnConfirm = document.getElementById('hud-btn-confirm-stock');
+        const btnDismiss = document.getElementById('hud-btn-dismiss-stock');
 
-        if (detection.stocked && banner && bannerText && btnConfirm) {
-            banner.style.display = 'flex';
-            bannerText.innerHTML = `🎉 <strong>Restock Detectado!</strong> Há itens à venda no Sótão neste momento!`;
+        if (detection.stocked && alertBox && alertText && btnConfirm) {
+            alertBox.style.display = 'flex';
+            alertText.innerHTML = `🎉 <strong>Restock no Sótão!</strong> Encontramos ${detection.count} item(ns) à venda neste momento!`;
 
             btnConfirm.addEventListener('click', () => {
                 const now = getCorrectedNow();
                 config.lastRestockTimestamp = now;
                 saveConfig(config);
-                banner.style.display = 'none';
+                alertBox.style.display = 'none';
                 updateUiTick();
+            });
+
+            btnDismiss?.addEventListener('click', () => {
+                alertBox.style.display = 'none';
             });
         }
     }
 
-    // Inicializa quando a página estiver pronta
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);
     } else {
@@ -1528,4 +1363,3 @@
     }
 
 })();
-

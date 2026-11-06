@@ -21,9 +21,10 @@ O **Sótão Quase Abandonado** (`https://www.neopets.com/halloween/garage.phtml`
 
 ## ✨ Funcionalidades do Script
 
-1. **Painel Integrado Exclusivo no Sótão (`/halloween/garage.phtml`)**:
-   - Fica posicionado no topo da página do sótão, integrado de forma limpa e moderna sem poluir outras páginas do Neopets.
-   - Pode ser minimizado ou expandido a qualquer momento pelo botão **▼ / ▲**.
+1. **Barra de Controle Compacta (HUD) no Topo do Sótão**:
+   - Barra horizontal extremamente enxuta (~44px de altura) inserida no topo de `td.content`, sem sobrepor ou empurrar os itens do sótão.
+   - Deixa todos os 24 itens do sótão 100% livres, desimpedidos e visíveis para você clicar na velocidade máxima durante os restocks.
+   - Projeções detalhadas e configurações abrem como *popovers* suspensos flutuantes apenas quando solicitados pelos botões **📅**, **⚙️** ou **✏️**.
 
 2. **Temporizador em Tempo Real com Status Coloridos**:
    - 🟢 **Aguardando (> 60s):** contagem regressiva tranquila.
