@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Neopets: Rastreador de Livros & Marcador de Lojas
 // @namespace    https://github.com/t-moedano/scriptnautas
-// @version      1.0.2
+// @version      1.0.3
 // @description  Rastreia livros lidos (normais e Booktastic) e destaca livros não lidos em lojas oficiais ou marca livros já lidos em lojas de usuários no Neopets.
 // @author       t-moedano
 // @match        *://*.neopets.com/books_read.phtml*
@@ -620,6 +620,33 @@
         renderFloatingBadge(activePet, petData, 'Loja de Usuário');
     }
 
+    function stackFloatingWidgets() {
+        const selectors = [
+            '#scriptnautas-status-badge',
+            '#sn-floating-stamp-badge',
+            '#scriptnautas-stamp-badge',
+            '#sn-gourmet-floating-widget',
+            '.sn-status-floating',
+            '.sn-floating-status'
+        ];
+        const widgets = [];
+        selectors.forEach(sel => {
+            document.querySelectorAll(sel).forEach(el => {
+                if (!widgets.includes(el) && el.style.display !== 'none' && el.isConnected) {
+                    widgets.push(el);
+                }
+            });
+        });
+        let currentBottom = 16;
+        widgets.forEach(w => {
+            w.style.bottom = `${currentBottom}px`;
+            w.style.right = '16px';
+            w.style.transition = 'bottom 0.25s ease';
+            const h = w.offsetHeight || 44;
+            currentBottom += h + 8;
+        });
+    }
+
     // =========================================================================
     // COMPONENTE: Badge Flutuante de Informação
     // =========================================================================
@@ -638,15 +665,31 @@
             badge.innerHTML = `
                 <span>⚠️ <strong>Scriptnautas:</strong> Nenhum livro sincronizado${petName ? ` para ${petName}` : ''}.</span>
                 <a href="/books_read.phtml${petName ? `?pet_name=${encodeURIComponent(petName)}` : ''}" target="_blank">Sincronizar Livros</a>
+                <span id="sn-book-close-widget" style="margin-left: 6px; cursor: pointer; color: #9ca3af; font-size: 14px; line-height: 1;" title="Ocultar nesta página">&times;</span>
             `;
         } else {
             badge.innerHTML = `
                 <span>📖 <strong>${petName}</strong>: ${total} livros lidos (${regCount} normais, ${bookCount} booktastic)</span>
                 <span style="color: #9ca3af;">•</span>
                 <a href="/books_read.phtml?pet_name=${encodeURIComponent(petName)}" title="Atualizar lista de livros">Atualizar</a>
+                <span id="sn-book-close-widget" style="margin-left: 6px; cursor: pointer; color: #9ca3af; font-size: 14px; line-height: 1;" title="Ocultar nesta página">&times;</span>
             `;
         }
 
         document.body.appendChild(badge);
+
+        const closeBtn = badge.querySelector('#sn-book-close-widget');
+        if (closeBtn) {
+            closeBtn.onclick = () => {
+                badge.remove();
+                stackFloatingWidgets();
+            };
+        }
+
+        stackFloatingWidgets();
+        setTimeout(stackFloatingWidgets, 100);
+        setTimeout(stackFloatingWidgets, 400);
+        setTimeout(stackFloatingWidgets, 1200);
+        window.addEventListener('resize', stackFloatingWidgets);
     }
 })();

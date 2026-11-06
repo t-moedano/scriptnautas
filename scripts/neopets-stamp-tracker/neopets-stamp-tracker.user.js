@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Neopets: Rastreador de Selos & Marcador de Lojas
 // @namespace    https://github.com/t-moedano/scriptnautas
-// @version      1.0.4
+// @version      1.0.5
 // @description  Rastreia selos, moedas e conchas colecionados no seu Álbum de Selos do Neopets e destaca itens faltantes em lojas oficiais (Post Office, Coin Shop, Sea Shells) e lojas de usuários.
 // @author       t-moedano
 // @match        *://*.neopets.com/stamps.phtml*
@@ -779,6 +779,33 @@
         renderFloatingBadge('Loja de Usuário', storage);
     }
 
+    function stackFloatingWidgets() {
+        const selectors = [
+            '#scriptnautas-status-badge',
+            '#sn-floating-stamp-badge',
+            '#scriptnautas-stamp-badge',
+            '#sn-gourmet-floating-widget',
+            '.sn-status-floating',
+            '.sn-floating-status'
+        ];
+        const widgets = [];
+        selectors.forEach(sel => {
+            document.querySelectorAll(sel).forEach(el => {
+                if (!widgets.includes(el) && el.style.display !== 'none' && el.isConnected) {
+                    widgets.push(el);
+                }
+            });
+        });
+        let currentBottom = 16;
+        widgets.forEach(w => {
+            w.style.bottom = `${currentBottom}px`;
+            w.style.right = '16px';
+            w.style.transition = 'bottom 0.25s ease';
+            const h = w.offsetHeight || 44;
+            currentBottom += h + 8;
+        });
+    }
+
     // Badge flutuante informativa no canto inferior da tela
     function renderFloatingBadge(contextName, storage) {
         const old = document.getElementById('sn-floating-stamp-badge');
@@ -799,8 +826,23 @@
             <span>${syncLabel}</span>
             <span style="color: #6b7280;">•</span>
             <a href="/stamps.phtml" title="Ir para o Álbum de Selos">Abrir Álbum</a>
+            <span id="sn-stamp-close-widget" style="margin-left: 6px; cursor: pointer; color: #9ca3af; font-size: 14px; line-height: 1;" title="Ocultar nesta página">&times;</span>
         `;
         document.body.appendChild(badge);
+
+        const closeBtn = badge.querySelector('#sn-stamp-close-widget');
+        if (closeBtn) {
+            closeBtn.onclick = () => {
+                badge.remove();
+                stackFloatingWidgets();
+            };
+        }
+
+        stackFloatingWidgets();
+        setTimeout(stackFloatingWidgets, 100);
+        setTimeout(stackFloatingWidgets, 400);
+        setTimeout(stackFloatingWidgets, 1200);
+        window.addEventListener('resize', stackFloatingWidgets);
     }
 
 })();

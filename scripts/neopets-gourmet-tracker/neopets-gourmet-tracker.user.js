@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Neopets: Rastreador de Comidas Gourmet & Marcador de Lojas
 // @namespace    https://github.com/t-moedano/scriptnautas
-// @version      1.0.0
+// @version      1.0.1
 // @description  Rastreia comidas gourmet (r90-r100) comidas pelo seu Neopet e destaca itens gourmet faltantes nas 27 lojas oficiais de comida e em lojas de usuários, integrado ao itemDB.
 // @author       t-moedano
 // @match        *://*.neopets.com/gourmet_club.phtml*
@@ -430,6 +430,7 @@
                 display: flex;
                 align-items: center;
                 gap: 10px;
+                transition: bottom 0.25s ease;
             }
             .sn-floating-status a {
                 color: #fbbf24;
@@ -455,6 +456,36 @@
         document.head.appendChild(style);
     }
 
+    // =========================================================================
+    // GERENCIADOR DE EMPILHAMENTO DOS WIDGETS FLUTUANTES (EVITA SOBREPOSIÇÃO)
+    // =========================================================================
+    function stackFloatingWidgets() {
+        const selectors = [
+            '#scriptnautas-status-badge', // Livros
+            '#scriptnautas-stamp-badge',  // Selos
+            '#sn-gourmet-floating-widget', // Gourmet
+            '.sn-status-floating',
+            '.sn-floating-status'
+        ];
+
+        const widgets = [];
+        selectors.forEach(sel => {
+            document.querySelectorAll(sel).forEach(el => {
+                if (!widgets.includes(el) && el.style.display !== 'none' && el.isConnected) {
+                    widgets.push(el);
+                }
+            });
+        });
+
+        let currentBottom = 16;
+        widgets.forEach(w => {
+            w.style.bottom = `${currentBottom}px`;
+            w.style.right = '16px';
+            const h = w.offsetHeight || 44;
+            currentBottom += h + 8; // 8px de respiro entre widgets
+        });
+    }
+
     const currentUrl = new URL(window.location.href);
     const pathname = currentUrl.pathname;
     const searchParams = currentUrl.searchParams;
@@ -465,7 +496,6 @@
     if (pathname.includes('gourmet_club.phtml')) {
         injectStyles();
 
-        // 1. Detecta o pet da página
         let targetPet = searchParams.get('pet_name');
         if (!targetPet) {
             const petHeading = document.body.innerText.match(/([a-zA-Z0-9_-]+)\s+has\s+scored\s+(\d+)\s+Gourmet/i);
@@ -481,16 +511,12 @@
             return;
         }
 
-        // Lê a pontuação oficial informada pelo Neopets
         let officialScore = null;
         const scoreMatch = document.body.innerText.match(/has\s+scored\s+(\d+)\s+Gourmet\s+Club\s+points/i);
         if (scoreMatch) {
             officialScore = parseInt(scoreMatch[1], 10);
         }
 
-        // 2. Extrai todas as imagens de comidas comidas
-        // Na página do Gourmet Club, as comidas aparecem como:
-        // <img src='//images.neopets.com/items/nome_do_item.gif' width=80 height=80 border=0>
         const itemImgs = document.querySelectorAll('.content img[src*="/items/"], img[width="80"][src*="/items/"]');
         const eatenImageIds = [];
         const seenImages = new Set();
@@ -504,7 +530,6 @@
             }
         });
 
-        // 3. Carrega o storage e sincroniza catálogo + dados do pet
         const storage = loadStorage();
         if (!storage.pets) storage.pets = {};
 
@@ -582,12 +607,10 @@
             saveStorage(storage);
         }
 
-        // Se o catálogo já existe e é válido, salva na hora e atualiza em segundo plano se necessário
         if (isCatalogValid(storage.catalog)) {
             persistPetData(storage.catalog);
             renderSyncBanner(targetPet, eatenImageIds.length, storage.catalog.itemCount);
         } else {
-            // Busca o catálogo para garantir primeira sincronização com dados ricos
             fetchItemdbCatalog(false).then(catalog => {
                 persistPetData(catalog);
                 renderSyncBanner(targetPet, eatenImageIds.length, catalog.itemCount);
@@ -618,11 +641,9 @@
                 const catalog = storage.catalog;
                 const petData = currentPet.data;
 
-                // Células de itens da loja oficial
                 const itemCells = document.querySelectorAll('.content table td[align="center"], div.shop-item');
 
                 itemCells.forEach(cell => {
-                    // Evita reprocessamento
                     if (cell.dataset.snGourmetChecked) return;
 
                     const img = cell.querySelector('img[src*="/items/"]');
@@ -635,23 +656,17 @@
                     const inspection = inspectFoodItem(rawName, imgSrc, catalog, petData);
                     cell.dataset.snGourmetChecked = 'true';
 
-                    if (!inspection.isGourmet) {
-                        // Comida comum: deixa original para não poluir a tela no restock
-                        return;
-                    }
+                    if (!inspection.isGourmet) return;
 
-                    // Se for Gourmet:
                     cell.style.position = 'relative';
 
                     if (inspection.hasEaten) {
-                        // Já comeu: esmaece para evitar gasto à toa
                         cell.classList.add('sn-gourmet-eaten');
                         const badge = document.createElement('div');
                         badge.className = 'sn-badge-gourmet-eaten';
                         badge.textContent = '✓ Comido';
                         cell.appendChild(badge);
                     } else {
-                        // NÃO COMEU: Destaque máximo!
                         cell.classList.add('sn-gourmet-missing');
 
                         const badge = document.createElement('div');
@@ -670,7 +685,6 @@
                 });
             }
 
-            // Executa imediatamente e garante o carregamento se o catálogo estiver desatualizado
             if (isCatalogValid(storage.catalog)) {
                 markOfficialShopItems();
             } else {
@@ -697,36 +711,78 @@
             const catalog = storage.catalog;
             const petData = currentPet.data;
 
-            const itemCells = document.querySelectorAll('.content table td[align="center"], div.shop-item');
+            // 1. Layout moderno de loja de usuário (.bsp-item)
+            const modernItems = document.querySelectorAll('.bsp-item:not([data-sn-gourmet-checked])');
+            modernItems.forEach(item => {
+                item.setAttribute('data-sn-gourmet-checked', 'true');
 
-            itemCells.forEach(cell => {
-                if (cell.dataset.snGourmetChecked) return;
+                const btn = item.querySelector('.bsp-item__buy');
+                const nameSpan = item.querySelector('.bsp-item__name');
+                const img = item.querySelector('.bsp-item__image, img[src*="/items/"]');
 
-                const img = cell.querySelector('img[src*="/items/"]');
-                if (!img) return;
+                const rawName = btn?.getAttribute('data-name') || nameSpan?.textContent || '';
+                const imgSrc = img?.getAttribute('src') || '';
 
-                const titleEl = cell.querySelector('b');
-                const rawName = titleEl ? titleEl.textContent.trim() : (img.getAttribute('alt') || img.getAttribute('title') || '');
-                const imgSrc = img.getAttribute('src');
+                if (!rawName && !imgSrc) return;
 
                 const inspection = inspectFoodItem(rawName, imgSrc, catalog, petData);
-                cell.dataset.snGourmetChecked = 'true';
+                if (!inspection.isGourmet) return; // Item comum: mantém neutro
 
-                if (!inspection.isGourmet) {
-                    return; // Item comum ou não gourmet: sem alteração
+                item.style.position = 'relative';
+
+                if (inspection.hasEaten) {
+                    item.classList.add('sn-gourmet-eaten');
+                    const badge = document.createElement('span');
+                    badge.className = 'sn-badge-gourmet-eaten';
+                    badge.textContent = '✓ Comido';
+                    item.appendChild(badge);
+                } else {
+                    item.classList.add('sn-gourmet-missing');
+
+                    const badge = document.createElement('span');
+                    badge.className = 'sn-badge-gourmet-needed';
+                    const rarity = inspection.gourmetInfo ? inspection.gourmetInfo.rarity : 90;
+                    badge.textContent = `⭐ GOURMET (r${rarity})`;
+                    item.appendChild(badge);
+
+                    if (inspection.gourmetInfo && inspection.gourmetInfo.price) {
+                        const priceTag = document.createElement('div');
+                        priceTag.className = 'sn-gourmet-price-tag';
+                        priceTag.textContent = `~${formatNumber(inspection.gourmetInfo.price)} NP`;
+                        item.appendChild(priceTag);
+                    }
                 }
+            });
+
+            // 2. Layout clássico de loja de usuário (tabelas com links para buy_item.phtml)
+            const buyLinks = document.querySelectorAll('a[href*="buy_item.phtml"]:not([data-sn-gourmet-checked])');
+            buyLinks.forEach(link => {
+                link.setAttribute('data-sn-gourmet-checked', 'true');
+                const cell = link.closest('td') || link.parentElement;
+                if (!cell) return;
+
+                const boldEl = cell.querySelector('b');
+                const img = cell.querySelector('img[src*="/items/"]');
+                const rawName = boldEl ? boldEl.textContent.trim() : (img?.getAttribute('alt') || '');
+                const imgSrc = img ? img.getAttribute('src') : '';
+
+                if (!rawName && !imgSrc) return;
+
+                const inspection = inspectFoodItem(rawName, imgSrc, catalog, petData);
+                if (!inspection.isGourmet) return;
 
                 cell.style.position = 'relative';
 
                 if (inspection.hasEaten) {
                     cell.classList.add('sn-gourmet-eaten');
-                    const badge = document.createElement('div');
+                    const badge = document.createElement('span');
                     badge.className = 'sn-badge-gourmet-eaten';
                     badge.textContent = '✓ Comido';
                     cell.appendChild(badge);
                 } else {
                     cell.classList.add('sn-gourmet-missing');
-                    const badge = document.createElement('div');
+
+                    const badge = document.createElement('span');
                     badge.className = 'sn-badge-gourmet-needed';
                     const rarity = inspection.gourmetInfo ? inspection.gourmetInfo.rarity : 90;
                     badge.textContent = `⭐ GOURMET (r${rarity})`;
@@ -735,18 +791,31 @@
             });
         }
 
-        markUserShopItems();
+        // Executa com garantia de catálogo pronto
+        if (isCatalogValid(storage.catalog)) {
+            markUserShopItems();
+        } else {
+            fetchItemdbCatalog(false).then(() => {
+                markUserShopItems();
+            }).catch(() => {
+                markUserShopItems();
+            });
+        }
 
-        // Observa mutações para páginas com recarregamento AJAX
+        // Observa recarregamentos AJAX, paginação e buscas no Shop Wizard
+        const gridRegion = document.getElementById('bsp-grid-region') ||
+                           document.querySelector('.bsp-grid') ||
+                           document.querySelector('.content') ||
+                           document.body;
+
         const observer = new MutationObserver(() => markUserShopItems());
-        const contentArea = document.querySelector('.content') || document.body;
-        observer.observe(contentArea, { childList: true, subtree: true });
+        observer.observe(gridRegion, { childList: true, subtree: true });
 
         renderFloatingWidget(storage, 'Loja de Usuário');
     }
 
     // =========================================================================
-    // WIDGET FLUTUANTE INFORMATIVO
+    // WIDGET FLUTUANTE INFORMATIVO COM AUTO-EMPILHAMENTO
     // =========================================================================
 
     function renderFloatingWidget(storage, contextTitle = null) {
@@ -756,7 +825,6 @@
         const currentPet = resolveCurrentPet(storage);
         const petName = currentPet.name || 'Nenhum';
         const eatenCount = currentPet.data ? currentPet.data.eatenCount : 0;
-        const catalogCount = storage.catalog ? storage.catalog.itemCount : 0;
 
         const widget = document.createElement('div');
         widget.id = 'sn-gourmet-floating-widget';
@@ -786,9 +854,30 @@
             `;
         }
 
+        html += `
+            <span id="sn-gourmet-close-widget" style="margin-left: 6px; cursor: pointer; color: #9ca3af; font-size: 14px; line-height: 1;" title="Ocultar nesta página">
+                &times;
+            </span>
+        `;
+
         widget.innerHTML = html;
         document.body.appendChild(widget);
+
+        const closeBtn = widget.querySelector('#sn-gourmet-close-widget');
+        if (closeBtn) {
+            closeBtn.onclick = () => {
+                widget.remove();
+                stackFloatingWidgets();
+            };
+        }
+
+        // Executa auto-empilhamento para evitar sobreposição de outros scripts
+        stackFloatingWidgets();
+        setTimeout(stackFloatingWidgets, 100);
+        setTimeout(stackFloatingWidgets, 400);
+        setTimeout(stackFloatingWidgets, 1200);
+
+        window.addEventListener('resize', stackFloatingWidgets);
     }
 
 })();
-
