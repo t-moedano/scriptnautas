@@ -10,6 +10,7 @@ Bem-vindo ao **Scriptnautas**! Este repositório reúne userscripts desenvolvido
 | Script | Categoria | Versão | Instalação 1-Clique | Descrição |
 | :--- | :--- | :---: | :---: | :--- |
 | **Neopets: Book Tracker & Shop Marker** | Neopets | `1.0.2` | [📥 Instalar](https://raw.githubusercontent.com/t-moedano/scriptnautas/main/scripts/neopets-book-tracker/neopets-book-tracker.user.js) | Destaca livros não lidos em lojas oficiais e marca livros já lidos em lojas de usuários. |
+| **Neopets: Stamp Tracker & Shop Marker** | Neopets | `1.0.0` | [📥 Instalar](https://raw.githubusercontent.com/t-moedano/scriptnautas/main/scripts/neopets-stamp-tracker/neopets-stamp-tracker.user.js) | Destaca selos, moedas e conchas faltantes na Post Office, Coin Shop, Sea Shells e lojas de usuários. |
 
 ---
 
@@ -54,11 +55,11 @@ scriptnautas/
 ├── README.md                              <- Catálogo geral e guia
 └── scripts/
     ├── neopets-book-tracker/
-    │   ├── README.md                      <- Guia detalhado do script
+    │   ├── README.md                      <- Guia detalhado do rastreador de livros
     │   └── neopets-book-tracker.user.js   <- Código do script
-    └── novo-script/
-        ├── README.md
-        └── novo-script.user.js
+    └── neopets-stamp-tracker/
+        ├── README.md                      <- Guia detalhado do rastreador de selos
+        └── neopets-stamp-tracker.user.js  <- Código do script
 ```
 
 ### Checklist para criar um novo script:
