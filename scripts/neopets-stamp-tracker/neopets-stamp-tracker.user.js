@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Neopets: Rastreador de Selos & Marcador de Lojas
 // @namespace    https://github.com/t-moedano/scriptnautas
-// @version      1.0.2
+// @version      1.0.3
 // @description  Rastreia selos, moedas e conchas colecionados no seu Álbum de Selos do Neopets e destaca itens faltantes em lojas oficiais (Post Office, Coin Shop, Sea Shells) e lojas de usuários.
 // @author       t-moedano
 // @match        *://*.neopets.com/stamps.phtml*
@@ -372,18 +372,25 @@
                 if (!img) return;
 
                 const src = img.getAttribute('src') || '';
-                // Se for slot vazio, espaçador ou setas, ignora
-                if (!src || src.includes('no_stamp.gif') || src.includes('stamp_blank.gif') || src.includes('transparent_spacer.gif')) {
-                    return;
-                }
+                const alt = (img.getAttribute('alt') || '').trim();
+                const title = (img.getAttribute('title') || '').trim();
+
+                // Slot vazio: usa especificamente "/no_stamp.gif" ou alt="No Stamp"
+                // IMPORTANTE: NÃO usar includes('no_stamp.gif') solto, pois 'sta_bruno_stamp.gif' contém 'no_stamp.gif'!
+                const isBlankSlot = src.includes('/no_stamp.gif') || 
+                                    src.includes('/stamp_blank.gif') || 
+                                    src.includes('transparent_spacer.gif') ||
+                                    (alt === 'No Stamp' && title === 'No Stamp');
+
+                if (isBlankSlot) return;
                 if (src.includes('arrow-') || src.includes('question_mark')) return;
 
-                let name = (img.getAttribute('alt') || img.getAttribute('title') || cell.getAttribute('title') || '').trim();
+                let name = (alt || title || cell.getAttribute('title') || '').trim();
                 const imgKey = extractItemHash(src);
 
                 if (name === 'No Stamp') return;
 
-                // Se o nome vier vazio pela TNT, usa o hash da imagem
+                // Se o nome vier vazio pela TNT, usa o hash da imagem como identificador seguro
                 if (!name && imgKey) {
                     name = imgKey;
                 }
