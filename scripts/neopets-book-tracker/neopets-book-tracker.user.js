@@ -626,6 +626,7 @@
             '#sn-floating-stamp-badge',
             '#scriptnautas-stamp-badge',
             '#sn-gourmet-floating-widget',
+            '#sn-itemdb-floating-widget',
             '.sn-status-floating',
             '.sn-floating-status'
         ];

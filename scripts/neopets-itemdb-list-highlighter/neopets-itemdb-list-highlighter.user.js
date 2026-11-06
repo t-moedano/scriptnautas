@@ -1,15 +1,17 @@
 // ==UserScript==
 // @name         Neopets: Marcador de Lojas por Lista do itemDB (Wishlist Highlighter)
 // @namespace    https://github.com/t-moedano/scriptnautas
-// @version      1.0.0
+// @version      1.0.1
 // @description  Destaca itens da sua lista personalizada do itemDB em qualquer loja oficial ou loja de usuário do Neopets.
 // @author       t-moedano
 // @match        *://*.neopets.com/objects.phtml?*type=shop*
 // @match        *://*.neopets.com/browseshop.phtml*
 // @match        *://itemdb.com.br/lists/*
 // @match        *://itemdb.com.br/pt/lists/*
+// @match        *://itemdb.com.br/*lists/*
 // @match        *://*.itemdb.com.br/lists/*
 // @match        *://*.itemdb.com.br/pt/lists/*
+// @match        *://*.itemdb.com.br/*lists/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=itemdb.com.br
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -58,12 +60,22 @@
         return Number(num).toLocaleString('pt-BR');
     }
 
+    function escapeHtml(text) {
+        if (!text) return '';
+        return String(text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
     function parseItemdbListUrl(input) {
         if (!input || typeof input !== 'string') return null;
         const trimmed = input.trim();
 
-        // Formato URL completo (ex: https://itemdb.com.br/pt/lists/nana/minha-lista)
-        const fullMatch = trimmed.match(/(?:https?:\/\/)?(?:www\.)?itemdb\.com\.br\/(?:[a-z]{2}\/)?lists\/([^\/\?#]+)\/([^\/\?#]+)/i);
+        // 1. Formato URL completo (ex: https://itemdb.com.br/pt/lists/nana/minha-lista ou itemdb.com.br/lists/...)
+        const fullMatch = trimmed.match(/(?:https?:\/\/)?(?:www\.)?itemdb\.com\.br\/(?:[a-z]{2}\/)?lists\/([^/?#]+)\/([^/?#]+)/i);
         if (fullMatch) {
             return {
                 username: decodeURIComponent(fullMatch[1]),
@@ -71,12 +83,21 @@
             };
         }
 
-        // Formato curto "usuario/slug"
-        const shortMatch = trimmed.match(/^([a-zA-Z0-9_\-\.]+)\/([a-zA-Z0-9_\-\.]+)$/);
+        // 2. Formato de caminho / pathname (ex: /pt/lists/nana/minha-lista ou /lists/nana/minha-lista)
+        const pathMatch = trimmed.match(/^(?:\/?[a-z]{2})?\/lists\/([^/?#]+)\/([^/?#]+)/i);
+        if (pathMatch) {
+            return {
+                username: decodeURIComponent(pathMatch[1]),
+                slug: decodeURIComponent(pathMatch[2])
+            };
+        }
+
+        // 3. Formato curto "usuario/slug"
+        const shortMatch = trimmed.match(/^([a-zA-Z0-9_\-.]+)\/([a-zA-Z0-9_\-.]+)$/);
         if (shortMatch) {
             return {
-                username: shortMatch[1],
-                slug: shortMatch[2]
+                username: decodeURIComponent(shortMatch[1]),
+                slug: decodeURIComponent(shortMatch[2])
             };
         }
 
@@ -143,10 +164,14 @@
         let itemsArray = [];
         if (Array.isArray(data)) {
             itemsArray = data;
-        } else if (data && Array.isArray(data.items)) {
-            itemsArray = data.items;
         } else if (data && typeof data === 'object') {
-            itemsArray = Object.values(data);
+            if (Array.isArray(data.items)) {
+                itemsArray = data.items;
+            } else if (data.items && typeof data.items === 'object') {
+                itemsArray = Object.values(data.items);
+            } else {
+                itemsArray = Object.values(data);
+            }
         }
 
         itemsArray.forEach(item => {
@@ -154,9 +179,26 @@
             const name = String(item.name).trim();
             const normName = normalizeTitle(name);
 
-            // image_id pode vir como número ou string (ex: 'foo_bar_123')
-            const imageId = item.image_id ? String(item.image_id).toLowerCase().trim() : null;
-            const priceValue = (item.price && typeof item.price.value === 'number') ? item.price.value : null;
+            // Suporta item.image (objeto { id, url }), item.image_id, ou item.image (string)
+            let imageId = null;
+            if (item.image && typeof item.image === 'object') {
+                imageId = item.image.id || extractItemHash(item.image.url);
+            } else if (item.image_id) {
+                imageId = item.image_id;
+            } else if (typeof item.image === 'string') {
+                imageId = extractItemHash(item.image) || item.image;
+            }
+            if (imageId) {
+                imageId = String(imageId).toLowerCase().trim();
+            }
+
+            let priceValue = null;
+            if (item.price && typeof item.price === 'object' && typeof item.price.value === 'number') {
+                priceValue = item.price.value;
+            } else if (typeof item.price === 'number') {
+                priceValue = item.price;
+            }
+
             const rarity = item.rarity || null;
 
             const entry = {
@@ -207,6 +249,21 @@
                 }
             };
 
+            const tryStandardFetch = () => {
+                const fetchUrl = (typeof window !== 'undefined' && window.location.hostname.includes('itemdb.com.br'))
+                    ? `/api/v1/lists/${encodeURIComponent(username)}/${encodeURIComponent(slug)}/itemdata`
+                    : apiUrl;
+
+                fetch(fetchUrl, { headers: { 'Accept': 'application/json' } })
+                    .then(r => {
+                        if (r.status === 404) throw new Error(`Lista não encontrada no itemDB (@${username}/${slug}).`);
+                        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                        return r.text();
+                    })
+                    .then(handleSuccess)
+                    .catch(e => reject(new Error(`Erro ao conectar com itemDB: ${e.message}`)));
+            };
+
             if (typeof GM_xmlhttpRequest !== 'undefined') {
                 GM_xmlhttpRequest({
                     method: 'GET',
@@ -219,24 +276,18 @@
                         } else if (res.status === 404) {
                             reject(new Error(`Lista não encontrada no itemDB (@${username}/${slug}). Verifique se a URL está correta e se a lista é pública.`));
                         } else {
-                            reject(new Error(`Erro HTTP ${res.status} ao consultar itemDB.`));
+                            tryStandardFetch();
                         }
                     },
                     ontimeout: function() {
-                        reject(new Error('Tempo limite esgotado ao contatar o servidor do itemDB.'));
+                        tryStandardFetch();
                     },
-                    onerror: function(err) {
-                        reject(new Error('Erro de conexão com o itemDB.'));
+                    onerror: function() {
+                        tryStandardFetch();
                     }
                 });
             } else {
-                fetch(apiUrl)
-                    .then(r => {
-                        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-                        return r.text();
-                    })
-                    .then(handleSuccess)
-                    .catch(reject);
+                tryStandardFetch();
             }
         });
     }
@@ -323,7 +374,7 @@
                 gap: 8px;
                 cursor: pointer;
                 user-select: none;
-                transition: transform 0.15s ease, background 0.15s ease;
+                transition: bottom 0.25s ease, transform 0.15s ease, background 0.15s ease;
             }
             .sn-itemdb-floating-widget:hover {
                 transform: translateY(-2px);
@@ -515,6 +566,105 @@
             .sn-itemdb-page-btn:hover {
                 transform: translateY(-1px);
                 box-shadow: 0 6px 16px rgba(124, 58, 237, 0.5);
+            }
+
+            /* Topo Roxo no itemDB */
+            .sn-itemdb-top-bar {
+                position: sticky;
+                top: 0;
+                left: 0;
+                width: 100%;
+                z-index: 999999;
+                background: linear-gradient(135deg, #4c1d95, #6d28d9, #7c3aed);
+                color: #ffffff;
+                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+                border-bottom: 2px solid #a855f7;
+                font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                padding: 10px 20px;
+                box-sizing: border-box;
+                animation: snItemdbSlideDown 0.3s ease-out;
+            }
+            @keyframes snItemdbSlideDown {
+                from { transform: translateY(-100%); opacity: 0; }
+                to { transform: translateY(0); opacity: 1; }
+            }
+            .sn-itemdb-bar-inner {
+                max-width: 1280px;
+                margin: 0 auto;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                flex-wrap: wrap;
+                gap: 12px;
+            }
+            .sn-itemdb-bar-left {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                font-size: 13px;
+                flex-wrap: wrap;
+            }
+            .sn-itemdb-bar-badge {
+                background: rgba(255, 255, 255, 0.18);
+                border: 1px solid rgba(255, 255, 255, 0.3);
+                padding: 3px 10px;
+                border-radius: 9999px;
+                font-size: 11px;
+                font-weight: 700;
+                letter-spacing: 0.5px;
+                text-transform: uppercase;
+                display: inline-flex;
+                align-items: center;
+                gap: 5px;
+            }
+            .sn-itemdb-bar-title {
+                font-size: 14px;
+                color: #f1f5f9;
+            }
+            .sn-itemdb-bar-title strong {
+                color: #ffffff;
+                font-weight: 700;
+            }
+            .sn-itemdb-bar-actions {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }
+            .sn-itemdb-btn-activate {
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                background: #ffffff;
+                color: #6d28d9 !important;
+                font-family: system-ui, -apple-system, sans-serif;
+                font-weight: 700;
+                font-size: 12px;
+                padding: 7px 16px;
+                border-radius: 8px;
+                border: none;
+                cursor: pointer;
+                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+                transition: transform 0.15s ease, background 0.15s ease;
+            }
+            .sn-itemdb-btn-activate:hover {
+                transform: translateY(-1px);
+                background: #f8fafc;
+            }
+            .sn-itemdb-btn-activate:disabled {
+                opacity: 0.7;
+                cursor: not-allowed;
+            }
+            .sn-itemdb-status-pill {
+                background: rgba(16, 185, 129, 0.25);
+                border: 1px solid #10b981;
+                color: #d1fae5;
+                padding: 3px 10px;
+                border-radius: 9999px;
+                font-size: 11px;
+                font-weight: 600;
+                display: inline-flex;
+                align-items: center;
+                gap: 5px;
             }
             .sn-itemdb-toast {
                 position: fixed;
@@ -708,8 +858,36 @@
     }
 
     // =========================================================================
-    // BOTÃO FLUTUANTE (WIDGET) NO NEOPETS
+    // BOTÃO FLUTUANTE (WIDGET) NO NEOPETS & AUTO-EMPILHAMENTO
     // =========================================================================
+
+    function stackFloatingWidgets() {
+        const selectors = [
+            '#scriptnautas-status-badge',      // Livros
+            '#sn-floating-stamp-badge',        // Selos
+            '#scriptnautas-stamp-badge',       // Selos alternativo
+            '#sn-gourmet-floating-widget',     // Gourmet
+            '#sn-itemdb-floating-widget',      // itemDB Wishlist
+            '.sn-status-floating',
+            '.sn-floating-status'
+        ];
+        const widgets = [];
+        selectors.forEach(sel => {
+            document.querySelectorAll(sel).forEach(el => {
+                if (!widgets.includes(el) && el.style.display !== 'none' && el.isConnected) {
+                    widgets.push(el);
+                }
+            });
+        });
+        let currentBottom = 16;
+        widgets.forEach(w => {
+            w.style.bottom = `${currentBottom}px`;
+            w.style.right = '16px';
+            w.style.transition = 'bottom 0.25s ease';
+            const h = w.offsetHeight || 44;
+            currentBottom += h + 8;
+        });
+    }
 
     function updateFloatingWidget() {
         let widget = document.getElementById('sn-itemdb-floating-widget');
@@ -719,7 +897,8 @@
         if (!widget) {
             widget = document.createElement('div');
             widget.id = 'sn-itemdb-floating-widget';
-            widget.className = 'sn-itemdb-floating-widget';
+            // Inclui classes padrão de status flutuante do Scriptnautas para auto-empilhamento universal
+            widget.className = 'sn-itemdb-floating-widget sn-status-floating sn-floating-status';
             widget.onclick = () => openConfigModal();
             document.body.appendChild(widget);
         }
@@ -739,6 +918,8 @@
             `;
             widget.title = 'Nenhuma lista do itemDB configurada. Clique para configurar.';
         }
+
+        stackFloatingWidgets();
     }
 
     // =========================================================================
@@ -876,52 +1057,138 @@
     function initItemdbSiteIntegration() {
         injectStyles();
 
-        const path = window.location.pathname;
-        const parsed = parseItemdbListUrl(path);
+        // 1. Detecta URL da lista (href ou pathname)
+        const parsed = parseItemdbListUrl(window.location.href) || parseItemdbListUrl(window.location.pathname);
         if (!parsed) return;
 
-        function injectActivationButton() {
-            if (document.getElementById('sn-itemdb-activate-btn')) return;
+        function getListTitle() {
+            const h1El = document.querySelector('h1');
+            if (h1El && h1El.textContent.trim()) {
+                return h1El.textContent.trim();
+            }
+            const st = loadStorage();
+            if (st.activeList && st.activeList.slug === parsed.slug) {
+                return st.activeList.name;
+            }
+            return parsed.slug.replace(/[-_]+/g, ' ');
+        }
 
-            // Busca título da lista ou cabeçalho da página
-            const headerContainer = document.querySelector('h1, .list-header, [class*="ListHeader"], main header, .container') || document.body;
-            if (!headerContainer) return;
+        function ensureTopBanner() {
+            let banner = document.getElementById('sn-itemdb-top-bar');
+            const storage = loadStorage();
+            const isActive = Boolean(storage.activeList &&
+                             storage.activeList.username.toLowerCase() === parsed.username.toLowerCase() &&
+                             storage.activeList.slug.toLowerCase() === parsed.slug.toLowerCase());
 
-            const listTitleEl = document.querySelector('h1');
-            const listTitle = listTitleEl ? listTitleEl.textContent.trim() : parsed.slug;
+            const listTitle = getListTitle();
 
-            const btn = document.createElement('button');
-            btn.id = 'sn-itemdb-activate-btn';
-            btn.className = 'sn-itemdb-page-btn';
-            btn.innerHTML = '⭐ Destacar esta lista nas Lojas do Neopets';
+            if (!banner) {
+                banner = document.createElement('div');
+                banner.id = 'sn-itemdb-top-bar';
+                banner.className = 'sn-itemdb-top-bar';
 
-            btn.onclick = () => {
-                btn.disabled = true;
-                btn.innerHTML = '⏳ Sincronizando com Scriptnautas...';
+                if (document.body) {
+                    document.body.prepend(banner);
+                } else if (document.documentElement) {
+                    document.documentElement.prepend(banner);
+                }
+            }
 
-                fetchListFromItemdb(parsed.username, parsed.slug, listTitle)
-                    .then(result => {
-                        btn.innerHTML = '✓ Lista Ativa no Neopets!';
-                        btn.style.background = '#10b981';
-                        showToast(`🚀 Lista "${result.name}" com ${result.itemCount} itens ativada no Neopets!`);
-                    })
-                    .catch(err => {
-                        btn.disabled = false;
-                        btn.innerHTML = '⭐ Destacar esta lista nas Lojas do Neopets';
-                        alert(`Erro ao ativar lista: ${err.message}`);
-                    });
-            };
+            banner.innerHTML = `
+                <div class="sn-itemdb-bar-inner">
+                    <div class="sn-itemdb-bar-left">
+                        <span class="sn-itemdb-bar-badge">📜 Scriptnautas</span>
+                        <span class="sn-itemdb-bar-title">
+                            Lista do itemDB: <strong>${escapeHtml(listTitle)}</strong>
+                        </span>
+                        ${isActive ? `<span class="sn-itemdb-status-pill">✓ Ativa no Neopets (${storage.activeList.itemCount} itens)</span>` : ''}
+                    </div>
+                    <div class="sn-itemdb-bar-actions">
+                        <button id="sn-itemdb-activate-top-btn" class="sn-itemdb-btn-activate">
+                            ${isActive ? '🔄 Sincronizar Novamente' : '⭐ Destacar esta lista nas Lojas do Neopets'}
+                        </button>
+                    </div>
+                </div>
+            `;
 
-            if (listTitleEl && listTitleEl.parentElement) {
-                listTitleEl.parentElement.appendChild(btn);
-            } else {
-                headerContainer.prepend(btn);
+            const btn = banner.querySelector('#sn-itemdb-activate-top-btn');
+            if (btn) {
+                btn.onclick = () => handleActivation(btn);
             }
         }
 
-        injectActivationButton();
-        const obs = new MutationObserver(() => injectActivationButton());
-        obs.observe(document.body, { childList: true, subtree: true });
+        function ensureInlineButton() {
+            const h1El = document.querySelector('h1');
+            if (!h1El) return;
+
+            let btn = document.getElementById('sn-itemdb-activate-btn');
+            const storage = loadStorage();
+            const isActive = Boolean(storage.activeList &&
+                             storage.activeList.username.toLowerCase() === parsed.username.toLowerCase() &&
+                             storage.activeList.slug.toLowerCase() === parsed.slug.toLowerCase());
+
+            if (!btn) {
+                btn = document.createElement('button');
+                btn.id = 'sn-itemdb-activate-btn';
+                btn.className = 'sn-itemdb-page-btn';
+
+                if (h1El.parentElement) {
+                    h1El.parentElement.appendChild(btn);
+                }
+            }
+
+            btn.innerHTML = isActive ? '✓ Ativa no Neopets (Atualizar)' : '⭐ Destacar esta lista nas Lojas do Neopets';
+            if (isActive) {
+                btn.style.background = '#10b981';
+            } else {
+                btn.style.background = 'linear-gradient(135deg, #7c3aed, #9333ea)';
+            }
+
+            btn.onclick = () => handleActivation(btn);
+        }
+
+        function handleActivation(triggerBtn) {
+            triggerBtn.disabled = true;
+            const originalText = triggerBtn.innerHTML;
+            triggerBtn.innerHTML = '⏳ Sincronizando com Scriptnautas...';
+
+            const title = getListTitle();
+
+            fetchListFromItemdb(parsed.username, parsed.slug, title)
+                .then(result => {
+                    triggerBtn.innerHTML = '✓ Lista Ativa no Neopets!';
+                    triggerBtn.style.background = '#10b981';
+                    showToast(`🚀 Lista "${result.name}" (${result.itemCount} itens) ativada nas Lojas do Neopets!`);
+
+                    ensureTopBanner();
+                    ensureInlineButton();
+                })
+                .catch(err => {
+                    triggerBtn.disabled = false;
+                    triggerBtn.innerHTML = originalText;
+                    alert(`Erro ao ativar lista: ${err.message}`);
+                });
+        }
+
+        ensureTopBanner();
+        ensureInlineButton();
+
+        let debounceTimer = null;
+        const obs = new MutationObserver(() => {
+            if (debounceTimer) clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => {
+                ensureTopBanner();
+                ensureInlineButton();
+            }, 120);
+        });
+
+        if (document.body) {
+            obs.observe(document.body, { childList: true, subtree: true });
+        } else {
+            window.addEventListener('DOMContentLoaded', () => {
+                obs.observe(document.body, { childList: true, subtree: true });
+            });
+        }
     }
 
     // =========================================================================
@@ -933,10 +1200,23 @@
         updateFloatingWidget();
         processShopItems();
 
+        // Empilhamento dinâmico sem sobreposição
+        stackFloatingWidgets();
+        setTimeout(stackFloatingWidgets, 100);
+        setTimeout(stackFloatingWidgets, 400);
+        setTimeout(stackFloatingWidgets, 1200);
+        window.addEventListener('resize', stackFloatingWidgets);
+
+        // Observa criação ou remoção de outros widgets na página para re-empilhar instantaneamente
+        const widgetObserver = new MutationObserver(() => {
+            stackFloatingWidgets();
+        });
+        widgetObserver.observe(document.body, { childList: true });
+
         // Observa recarregamento dinâmico de itens na loja (restock, filtros, AJAX)
         const container = document.querySelector('.shop-grid, #container__2020') || document.body;
-        const observer = new MutationObserver(() => processShopItems());
-        observer.observe(container, { childList: true, subtree: true });
+        const shopObserver = new MutationObserver(() => processShopItems());
+        shopObserver.observe(container, { childList: true, subtree: true });
 
         // Menu do Tampermonkey
         if (typeof GM_registerMenuCommand !== 'undefined') {

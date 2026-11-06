@@ -444,8 +444,10 @@
     function stackFloatingWidgets() {
         const selectors = [
             '#scriptnautas-status-badge', // Livros
-            '#scriptnautas-stamp-badge',  // Selos
+            '#sn-floating-stamp-badge',   // Selos
+            '#scriptnautas-stamp-badge',  // Selos alternativo
             '#sn-gourmet-floating-widget', // Gourmet
+            '#sn-itemdb-floating-widget', // itemDB Wishlist
             '.sn-status-floating',
             '.sn-floating-status'
         ];
