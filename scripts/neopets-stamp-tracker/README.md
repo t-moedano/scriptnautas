@@ -12,17 +12,22 @@ Script para Tampermonkey que rastreia os selos, moedas, conchas e amuletos já c
    - Lê todas as 54+ páginas do seu álbum em segundo plano em apenas ~5 segundos, com barra de progresso em tempo real e controle de requisições para evitar sobrecarga.
 2. **Sincronização Passiva Contínua**:
    - Sempre que você folhear qualquer página do seu álbum normalmente (`stamps.phtml?type=album&page_id=X`), o script detecta os selos colados e atualiza o banco local automaticamente.
-3. **Lojas Oficiais Homologadas**:
+3. **Cores Dinâmicas por Faixa de Preço (itemDB)**:
+   - Integrado à lista oficial de colecionáveis do **itemDB** (`official/all-collectibles`) com cache inteligente de 14 dias.
+   - Configure até **5 faixas de preço** com cores personalizadas (ex: até 10M 🟢 Verde, 10M-50M 🟡 Amarelo, acima de 50M 🔴 Vermelho, sem cotação 🟣 Roxo).
+   - Suporte a digitação rápida de valores: `10M`, `50m`, `500k` ou `+` para sem limite.
+   - Itens faltantes nas lojas recebem o destaque na cor exata da faixa de valor de mercado!
+4. **Lojas Oficiais Homologadas**:
    - **Post Office** (Loja #58 - Selos)
    - **Coin Shop** (Loja #68 - Moedas colecionáveis)
    - **Sea Shells** (Loja #86 - Conchas do mar)
    - **Toy Shop** (Loja #3 - Amuletos de Álbum: itens contendo `Collectable Charm` e o `Baelia Charm`)
-   - Destaca itens **faltantes** com borda verde brilhante e tag `⭐ FALTANDO`.
+   - Destaca itens **faltantes** com a cor da faixa de preço e tag `⭐ FALTANDO` (passe o mouse para ver a cotação em NP).
    - Marca itens **já colecionados** com opacidade reduzida e tag `✓ Colecionado`.
    - Na Toy Shop, itens normais (brinquedos, pelúcias, etc.) são ignorados e não poluem a tela.
-4. **Lojas de Usuários (`browseshop.phtml`)**:
+5. **Lojas de Usuários (`browseshop.phtml`)**:
    - **Filtro seguro**: escurece apenas os itens que você **tem certeza que já colecionou** no seu álbum com tag `✓ Colecionado`. Não altera itens não colecionados (evitando falsos positivos com comidas, poções, brinquedos, etc.).
-5. **Zero Lag / 0ms de Atraso**:
+6. **Zero Lag / 0ms de Atraso**:
    - Funciona em modo *Cache-First*: nas lojas, o script nunca faz requisições de rede lentas; a verificação é instantânea na memória do navegador.
 
 ---
@@ -41,10 +46,15 @@ Script para Tampermonkey que rastreia os selos, moedas, conchas e amuletos já c
 3. Clique no botão **⚡ Sincronizar Álbum Completo**.
 4. Uma janela mostrará o progresso enquanto ele varre todas as páginas do seu álbum (leva apenas 4 a 5 segundos).
 
-### Passo 3: Fazer Compras
+### Passo 3: Configurar Cores por Faixas de Preço (Opcional)
+- No banner do álbum ou no distintivo flutuante nas lojas, clique em **`🎨 Faixas de Preço`** (ou **`🎨 Cores`**).
+- Personalize até 5 faixas com seus próprios intervalos de NPs e cores (ou use a configuração padrão: Verde até 10M, Amarelo até 50M e Vermelho acima de 50M).
+- Clique em **`🔄 Atualizar Preços`** para puxar as últimas cotações do itemDB.
+
+### Passo 4: Fazer Compras
 - Vá para a **Post Office** (`objects.phtml?type=shop&obj_type=58`), **Coin Shop** (`obj_type=68`), **Sea Shells** (`obj_type=86`), **Toy Shop** (`obj_type=3`) ou qualquer loja de usuários.
-- Os itens que você ainda não tem estarão realçados em verde `⭐ FALTANDO` para você comprar no restock sem perder tempo pensando se já tem ou não!
-- Um distintivo flutuante no canto inferior direito mostrará o status da loja e quantos selos você tem salvos.
+- Os selos faltantes estarão destacados com a **cor da sua faixa de preço correspondente** (e ao passar o mouse você confere o valor em NPs).
+- Um distintivo flutuante no canto inferior direito permite abrir as configurações de cores ou o álbum a qualquer momento.
 
 ---
 

@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Neopets: Rastreador de Selos & Marcador de Lojas
 // @namespace    https://github.com/t-moedano/scriptnautas
-// @version      1.0.6
-// @description  Rastreia selos, moedas, conchas e amuletos colecionados no seu Álbum de Selos do Neopets e destaca itens faltantes em lojas oficiais (Post Office, Coin Shop, Sea Shells, Toy Shop) e lojas de usuários.
+// @version      1.1.0
+// @description  Rastreia selos, moedas, conchas e amuletos colecionados no Álbum de Selos do Neopets e destaca itens faltantes em lojas oficiais e de usuários com cores personalizadas por faixa de preço do itemDB.
 // @author       t-moedano
 // @match        *://*.neopets.com/stamps.phtml*
 // @match        *://*.neopets.com/objects.phtml?*type=shop*
@@ -11,7 +11,10 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_xmlhttpRequest
+// @grant        GM_registerMenuCommand
 // @grant        unsafeWindow
+// @connect      itemdb.com.br
+// @connect      www.itemdb.com.br
 // @connect      neopets.com
 // @connect      www.neopets.com
 // @run-at       document-end
@@ -25,6 +28,15 @@
     'use strict';
 
     const STORAGE_KEY = 'neopets_stamps_storage_v1';
+    const ITEMDB_CACHE_TTL_MS = 14 * 24 * 60 * 60 * 1000; // 14 dias
+
+    // Faixas padrão de preço (máximo 5 faixas configuráveis)
+    const DEFAULT_PRICE_TIERS = [
+        { maxPrice: 10000000, color: '#22c55e' }, // Até 10M -> Verde
+        { maxPrice: 50000000, color: '#eab308' }, // Até 50M -> Amarelo
+        { maxPrice: Infinity, color: '#ef4444' }  // Acima de 50M -> Vermelho
+    ];
+    const DEFAULT_UNPRICED_COLOR = '#8b5cf6'; // Roxo para itens sem preço no itemDB
 
     // Lojas oficiais homologadas que vendem itens para o álbum de selos
     const OFFICIAL_STAMP_SHOPS = {
@@ -107,16 +119,35 @@
                     pages: {},
                     pageCounts: {},
                     stamps: {},
-                    stampImages: {}
+                    stampImages: {},
+                    itemdbPrices: null,
+                    priceTiers: JSON.parse(JSON.stringify(DEFAULT_PRICE_TIERS)),
+                    unpricedColor: DEFAULT_UNPRICED_COLOR
                 };
             }
             const data = JSON.parse(raw);
             data.stampImages = data.stampImages || {};
             data.pageCounts = data.pageCounts || {};
+            data.priceTiers = (Array.isArray(data.priceTiers) && data.priceTiers.length > 0)
+                ? data.priceTiers
+                : JSON.parse(JSON.stringify(DEFAULT_PRICE_TIERS));
+            data.unpricedColor = data.unpricedColor || DEFAULT_UNPRICED_COLOR;
             return data;
         } catch (e) {
             console.error('[Scriptnautas Selos] Erro ao carregar storage:', e);
-            return { username: null, lastSync: null, totalCount: 0, uniqueCount: 0, pages: {}, pageCounts: {}, stamps: {}, stampImages: {} };
+            return {
+                username: null,
+                lastSync: null,
+                totalCount: 0,
+                uniqueCount: 0,
+                pages: {},
+                pageCounts: {},
+                stamps: {},
+                stampImages: {},
+                itemdbPrices: null,
+                priceTiers: JSON.parse(JSON.stringify(DEFAULT_PRICE_TIERS)),
+                unpricedColor: DEFAULT_UNPRICED_COLOR
+            };
         }
     }
 
@@ -167,6 +198,205 @@
         }
     }
 
+    function hexToRgba(hex, alpha) {
+        if (!hex || typeof hex !== 'string') return `rgba(34, 197, 94, ${alpha})`;
+        let clean = hex.replace('#', '').trim();
+        if (clean.length === 3) {
+            clean = clean.split('').map(c => c + c).join('');
+        }
+        const num = parseInt(clean, 16);
+        if (isNaN(num)) return `rgba(34, 197, 94, ${alpha})`;
+        const r = (num >> 16) & 255;
+        const g = (num >> 8) & 255;
+        const b = num & 255;
+        return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+
+    function formatNumber(num) {
+        if (num === null || num === undefined || isNaN(num)) return '0';
+        return Number(num).toLocaleString('pt-BR');
+    }
+
+    function formatPriceCompact(num) {
+        if (num === Infinity || num === null || num === undefined) return 'Sem limite';
+        if (num >= 1000000) {
+            const m = num / 1000000;
+            return Number.isInteger(m) ? `${m}M` : `${m.toFixed(1)}M`;
+        }
+        if (num >= 1000) {
+            const k = num / 1000;
+            return Number.isInteger(k) ? `${k}k` : `${k.toFixed(1)}k`;
+        }
+        return String(num);
+    }
+
+    function parsePriceInput(val) {
+        if (val === null || val === undefined) return null;
+        val = String(val).trim().toLowerCase();
+        if (val === 'inf' || val === 'infinity' || val === 'acima' || val === '+' || val === '' || val === 'sem limite' || val === 'sem teto') return Infinity;
+        let multiplier = 1;
+        if (val.endsWith('m') || val.endsWith('kk')) {
+            multiplier = 1000000;
+            val = val.replace(/m|kk/g, '').trim();
+        } else if (val.endsWith('k')) {
+            multiplier = 1000;
+            val = val.replace(/k/g, '').trim();
+        }
+        val = val.replace(/\./g, '').replace(',', '.');
+        const num = parseFloat(val);
+        if (isNaN(num) || num < 0) return null;
+        return Math.round(num * multiplier);
+    }
+
+    function getItemPrice(itemName, itemSrc, itemdbPrices) {
+        if (!itemdbPrices) return null;
+        if (itemName) {
+            const norm = normalizeTitle(itemName);
+            if (itemdbPrices.byName && itemdbPrices.byName[norm] !== undefined) {
+                return itemdbPrices.byName[norm];
+            }
+        }
+        if (itemSrc) {
+            const hash = extractItemHash(itemSrc);
+            if (hash && itemdbPrices.byImage && itemdbPrices.byImage[hash] !== undefined) {
+                return itemdbPrices.byImage[hash];
+            }
+        }
+        return null;
+    }
+
+    function getItemTierColor(price, priceTiers, unpricedColor) {
+        if (price === null || price === undefined || isNaN(price)) {
+            return unpricedColor || DEFAULT_UNPRICED_COLOR;
+        }
+        if (!priceTiers || !priceTiers.length) {
+            return '#22c55e';
+        }
+
+        const sorted = [...priceTiers].sort((a, b) => a.maxPrice - b.maxPrice);
+        for (const tier of sorted) {
+            if (price <= tier.maxPrice) {
+                return tier.color;
+            }
+        }
+        return sorted[sorted.length - 1].color;
+    }
+
+    function fetchItemdbPrices(force = false) {
+        return new Promise((resolve, reject) => {
+            const storage = loadStorage();
+            const now = Date.now();
+            if (!force && storage.itemdbPrices && storage.itemdbPrices.lastUpdated && 
+                (now - storage.itemdbPrices.lastUpdated < ITEMDB_CACHE_TTL_MS) && 
+                storage.itemdbPrices.itemCount > 100) {
+                return resolve(storage.itemdbPrices);
+            }
+
+            const apiUrl = 'https://itemdb.com.br/api/v1/lists/official/all-collectibles/itemdata';
+
+            const handleSuccess = (responseText) => {
+                try {
+                    const data = JSON.parse(responseText);
+                    let itemsArray = [];
+                    if (Array.isArray(data)) {
+                        itemsArray = data;
+                    } else if (data && typeof data === 'object') {
+                        if (Array.isArray(data.items)) {
+                            itemsArray = data.items;
+                        } else if (data.items && typeof data.items === 'object') {
+                            itemsArray = Object.values(data.items);
+                        } else {
+                            itemsArray = Object.values(data);
+                        }
+                    }
+
+                    const byName = {};
+                    const byImage = {};
+                    let validPrices = 0;
+
+                    itemsArray.forEach(item => {
+                        if (!item || !item.name) return;
+                        const name = String(item.name).trim();
+                        const norm = normalizeTitle(name);
+
+                        let priceValue = null;
+                        if (item.price && typeof item.price === 'object' && typeof item.price.value === 'number') {
+                            priceValue = item.price.value;
+                        } else if (typeof item.price === 'number') {
+                            priceValue = item.price;
+                        }
+
+                        let imageId = null;
+                        if (item.image && typeof item.image === 'object') {
+                            imageId = item.image.id || extractItemHash(item.image.url);
+                        } else if (item.image_id) {
+                            imageId = item.image_id;
+                        } else if (typeof item.image === 'string') {
+                            imageId = extractItemHash(item.image) || item.image;
+                        }
+                        if (imageId) {
+                            imageId = String(imageId).toLowerCase().trim();
+                        }
+
+                        if (priceValue !== null && !isNaN(priceValue)) {
+                            validPrices++;
+                        }
+
+                        byName[norm] = priceValue;
+                        if (imageId) {
+                            byImage[imageId] = priceValue;
+                        }
+                    });
+
+                    const processed = {
+                        lastUpdated: Date.now(),
+                        itemCount: Object.keys(byName).length,
+                        pricedCount: validPrices,
+                        byName: byName,
+                        byImage: byImage
+                    };
+
+                    const curStorage = loadStorage();
+                    curStorage.itemdbPrices = processed;
+                    saveStorage(curStorage);
+                    resolve(processed);
+                } catch (err) {
+                    reject(new Error('Erro ao processar dados de preços do itemDB.'));
+                }
+            };
+
+            if (typeof GM_xmlhttpRequest !== 'undefined') {
+                GM_xmlhttpRequest({
+                    method: 'GET',
+                    url: apiUrl,
+                    headers: { 'Accept': 'application/json' },
+                    timeout: 30000,
+                    onload: function(res) {
+                        if (res.status >= 200 && res.status < 300) {
+                            handleSuccess(res.responseText);
+                        } else {
+                            reject(new Error(`Erro ao conectar ao itemDB (HTTP ${res.status}). Dica: abra o site itemdb.com.br em uma aba para validar a sessão.`));
+                        }
+                    },
+                    ontimeout: function() {
+                        reject(new Error('Tempo limite esgotado ao contatar o itemDB.'));
+                    },
+                    onerror: function(err) {
+                        reject(new Error('Falha de conexão com o itemDB.'));
+                    }
+                });
+            } else {
+                fetch(apiUrl, { headers: { 'Accept': 'application/json' } })
+                    .then(r => {
+                        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                        return r.text();
+                    })
+                    .then(handleSuccess)
+                    .catch(e => reject(new Error(`Falha de conexão com o itemDB: ${e.message}`)));
+            }
+        });
+    }
+
     // Checa se o item já foi colecionado (por NOME normalizado ou pelo HASH da IMAGEM)
     function isCollectedItem(itemName, itemSrc, collectedSet, imageSet) {
         if (itemName) {
@@ -195,22 +425,6 @@
                 from { opacity: 0; transform: translate(-50%, -10px); }
                 to { opacity: 1; transform: translate(-50%, 0); }
             }
-            .sn-badge-missing {
-                position: absolute;
-                top: 4px;
-                right: 4px;
-                background: #16a34a;
-                color: #ffffff;
-                font-weight: 800;
-                font-size: 10px;
-                padding: 3px 6px;
-                border-radius: 9999px;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-                z-index: 10;
-                pointer-events: none;
-                text-transform: uppercase;
-                letter-spacing: 0.5px;
-            }
             .sn-badge-collected {
                 position: absolute;
                 top: 4px;
@@ -225,16 +439,32 @@
                 pointer-events: none;
             }
             .sn-item-missing {
-                outline: 3px solid #22c55e !important;
-                background: rgba(34, 197, 94, 0.12) !important;
+                outline: 3px solid var(--sn-tier-color, #22c55e) !important;
+                background: var(--sn-tier-bg, rgba(34, 197, 94, 0.12)) !important;
                 border-radius: 8px !important;
-                box-shadow: 0 0 12px rgba(34, 197, 94, 0.45) !important;
+                box-shadow: 0 0 12px var(--sn-tier-shadow, rgba(34, 197, 94, 0.45)) !important;
                 position: relative !important;
                 transition: transform 0.15s ease, box-shadow 0.15s ease;
             }
             .sn-item-missing:hover {
                 transform: translateY(-2px);
-                box-shadow: 0 0 16px rgba(34, 197, 94, 0.7) !important;
+                box-shadow: 0 0 16px var(--sn-tier-shadow, rgba(34, 197, 94, 0.7)) !important;
+            }
+            .sn-badge-missing {
+                position: absolute;
+                top: 4px;
+                right: 4px;
+                background: var(--sn-tier-color, #16a34a);
+                color: #ffffff;
+                font-weight: 800;
+                font-size: 10px;
+                padding: 3px 6px;
+                border-radius: 9999px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+                z-index: 10;
+                pointer-events: none;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
             }
             .sn-item-collected {
                 opacity: 0.38 !important;
@@ -335,6 +565,245 @@
             }
         `;
         document.head.appendChild(style);
+    }
+
+    // =========================================================================
+    // MODAL DE CONFIGURAÇÃO DE FAIXAS DE PREÇO (ITEMDB)
+    // =========================================================================
+
+    function openPriceConfigModal(onSavedCallback) {
+        injectStyles();
+        const existing = document.getElementById('sn-price-config-overlay');
+        if (existing) existing.remove();
+
+        const storage = loadStorage();
+        let tiers = JSON.parse(JSON.stringify(storage.priceTiers || DEFAULT_PRICE_TIERS));
+        let unpricedColor = storage.unpricedColor || DEFAULT_UNPRICED_COLOR;
+
+        const overlay = document.createElement('div');
+        overlay.id = 'sn-price-config-overlay';
+        overlay.className = 'sn-sync-modal-overlay';
+
+        function renderModalContent() {
+            const prices = storage.itemdbPrices;
+            let dbStatusText = '<span style="color: #f87171;">Não sincronizado</span>';
+            if (prices && prices.lastUpdated) {
+                const dateStr = new Date(prices.lastUpdated).toLocaleDateString('pt-BR');
+                const timeStr = new Date(prices.lastUpdated).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                dbStatusText = `<strong style="color: #34d399;">${prices.itemCount}</strong> colecionáveis (<strong style="color: #38bdf8;">${prices.pricedCount || 0}</strong> cotados) • Atualizado em ${dateStr} ${timeStr}`;
+            }
+
+            overlay.innerHTML = `
+                <div class="sn-sync-modal" style="max-width: 580px; text-align: left; box-sizing: border-box;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #374151; padding-bottom: 12px; margin-bottom: 16px;">
+                        <h3 style="margin: 0; font-size: 17px; color: #38bdf8; display: flex; align-items: center; gap: 8px;">
+                            🎨 Cores & Faixas de Preço (itemDB)
+                        </h3>
+                        <span id="sn-config-close-x" style="cursor: pointer; font-size: 24px; color: #9ca3af; line-height: 1;" title="Fechar">&times;</span>
+                    </div>
+
+                    <!-- Caixa status itemDB -->
+                    <div style="background: #111827; border: 1px solid #374151; border-radius: 10px; padding: 12px 14px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;">
+                        <div>
+                            <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #9ca3af; font-weight: 700;">
+                                🏷️ Catálogo do itemDB (Cache de 14 dias)
+                            </div>
+                            <div id="sn-db-status-label" style="font-size: 12px; color: #e5e7eb; margin-top: 3px;">
+                                ${dbStatusText}
+                            </div>
+                        </div>
+                        <button id="sn-btn-update-itemdb" class="sn-btn-primary" style="background: #0284c7; font-size: 12px; padding: 6px 14px;">
+                            🔄 Atualizar Preços
+                        </button>
+                    </div>
+
+                    <!-- Título Faixas -->
+                    <div style="margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px;">
+                        <div>
+                            <div style="font-weight: 700; font-size: 13px; color: #f3f4f6;">Faixas de Preço dos Selos Faltantes</div>
+                            <div style="font-size: 11px; color: #9ca3af;">Até 5 faixas com cores e tetos (ex: 10M, 50m, 500k ou + para sem limite):</div>
+                        </div>
+                        <button id="sn-btn-add-tier" class="sn-btn-primary" style="background: #4f46e5; font-size: 11px; padding: 5px 12px; ${tiers.length >= 5 ? 'display: none;' : ''}">
+                            ➕ Nova Faixa (${tiers.length}/5)
+                        </button>
+                    </div>
+
+                    <!-- Lista de Faixas -->
+                    <div id="sn-tiers-container" style="display: flex; flex-direction: column; gap: 8px; max-height: 220px; overflow-y: auto; margin-bottom: 14px; padding-right: 4px;">
+                    </div>
+
+                    <!-- Item sem preço -->
+                    <div style="background: #111827; border: 1px solid #374151; border-radius: 8px; padding: 10px 12px; margin-bottom: 16px; display: flex; align-items: center; justify-content: space-between;">
+                        <div>
+                            <div style="font-size: 12px; font-weight: 600; color: #e5e7eb;">Selo sem cotação recente no itemDB:</div>
+                            <div style="font-size: 11px; color: #9ca3af;">Cor aplicada quando o selo não tem histórico de preço</div>
+                        </div>
+                        <input type="color" id="sn-unpriced-color-input" value="${unpricedColor}" style="width: 38px; height: 32px; border: none; border-radius: 6px; cursor: pointer; background: transparent;" title="Escolher cor para itens sem cotação">
+                    </div>
+
+                    <!-- Rodapé com Ações -->
+                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; border-top: 1px solid #374151; padding-top: 14px;">
+                        <button id="sn-btn-restore-tiers" style="background: transparent; border: 1px solid #4b5563; color: #9ca3af; font-size: 12px; padding: 7px 12px; border-radius: 8px; cursor: pointer; transition: all 0.2s;">
+                            Restaurar Padrões
+                        </button>
+                        <div style="display: flex; gap: 8px;">
+                            <button id="sn-btn-cancel-config" style="background: #374151; color: #d1d5db; border: none; font-size: 12px; padding: 7px 14px; border-radius: 8px; cursor: pointer;">
+                                Cancelar
+                            </button>
+                            <button id="sn-btn-save-config" class="sn-btn-primary" style="font-size: 12px; padding: 7px 16px;">
+                                💾 Salvar Alterações
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            const container = overlay.querySelector('#sn-tiers-container');
+
+            function renderTiersRows() {
+                container.innerHTML = '';
+                tiers.forEach((tier, index) => {
+                    const row = document.createElement('div');
+                    row.className = 'sn-tier-row';
+                    row.style.cssText = 'display: flex; align-items: center; gap: 10px; background: #111827; border: 1px solid #374151; border-radius: 8px; padding: 8px 10px;';
+
+                    const displayVal = tier.maxPrice === Infinity ? '+' : formatPriceCompact(tier.maxPrice);
+                    const formattedHint = tier.maxPrice === Infinity ? 'Sem teto (acima de tudo)' : `${formatNumber(tier.maxPrice)} NP`;
+
+                    row.innerHTML = `
+                        <input type="color" class="sn-tier-color" value="${tier.color}" style="width: 34px; height: 30px; border: none; border-radius: 6px; cursor: pointer; background: transparent;" title="Escolher cor da faixa">
+                        <div style="flex: 1; display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                            <span style="font-size: 12px; color: #9ca3af; white-space: nowrap;">Até:</span>
+                            <input type="text" class="sn-tier-price" value="${displayVal}" placeholder="ex: 10M ou +" style="width: 100px; background: #1f2937; border: 1px solid #4b5563; color: #f3f4f6; border-radius: 6px; padding: 4px 8px; font-size: 12px; font-family: monospace;">
+                            <span class="sn-tier-hint" style="font-size: 11px; color: #38bdf8;">${formattedHint}</span>
+                        </div>
+                        ${tiers.length > 1 ? `<button class="sn-tier-del-btn" style="background: transparent; border: none; color: #f87171; cursor: pointer; font-size: 16px; padding: 2px 6px; line-height: 1;" title="Remover esta faixa">&times;</button>` : ''}
+                    `;
+
+                    const colorInput = row.querySelector('.sn-tier-color');
+                    const priceInput = row.querySelector('.sn-tier-price');
+                    const hintSpan = row.querySelector('.sn-tier-hint');
+                    const delBtn = row.querySelector('.sn-tier-del-btn');
+
+                    colorInput.addEventListener('input', (e) => {
+                        tier.color = e.target.value;
+                    });
+
+                    priceInput.addEventListener('input', (e) => {
+                        const parsed = parsePriceInput(e.target.value);
+                        if (parsed === null) {
+                            hintSpan.textContent = 'Inválido';
+                            hintSpan.style.color = '#f87171';
+                        } else if (parsed === Infinity) {
+                            tier.maxPrice = Infinity;
+                            hintSpan.textContent = 'Sem teto (acima de tudo)';
+                            hintSpan.style.color = '#a78bfa';
+                        } else {
+                            tier.maxPrice = parsed;
+                            hintSpan.textContent = `${formatNumber(parsed)} NP`;
+                            hintSpan.style.color = '#38bdf8';
+                        }
+                    });
+
+                    if (delBtn) {
+                        delBtn.addEventListener('click', () => {
+                            tiers.splice(index, 1);
+                            renderTiersRows();
+                            updateAddButton();
+                        });
+                    }
+
+                    container.appendChild(row);
+                });
+            }
+
+            function updateAddButton() {
+                const addBtn = overlay.querySelector('#sn-btn-add-tier');
+                if (addBtn) {
+                    addBtn.textContent = `➕ Nova Faixa (${tiers.length}/5)`;
+                    addBtn.style.display = tiers.length >= 5 ? 'none' : 'inline-block';
+                }
+            }
+
+            renderTiersRows();
+
+            // Botão Adicionar Faixa
+            overlay.querySelector('#sn-btn-add-tier')?.addEventListener('click', () => {
+                if (tiers.length >= 5) return;
+                let newMax = 100000000;
+                let newColor = '#f97316';
+                if (tiers.length > 0) {
+                    const prevMax = tiers[tiers.length - 1].maxPrice;
+                    if (prevMax !== Infinity) {
+                        newMax = prevMax * 2;
+                    }
+                }
+                tiers.push({ maxPrice: newMax, color: newColor });
+                renderTiersRows();
+                updateAddButton();
+            });
+
+            // Atualizar itemDB
+            overlay.querySelector('#sn-btn-update-itemdb')?.addEventListener('click', async () => {
+                const btn = overlay.querySelector('#sn-btn-update-itemdb');
+                const label = overlay.querySelector('#sn-db-status-label');
+                btn.disabled = true;
+                btn.textContent = 'Carregando...';
+                try {
+                    const res = await fetchItemdbPrices(true);
+                    const dateStr = new Date(res.lastUpdated).toLocaleDateString('pt-BR');
+                    label.innerHTML = `<strong style="color: #34d399;">${res.itemCount}</strong> colecionáveis (<strong style="color: #38bdf8;">${res.pricedCount || 0}</strong> cotados) • Atualizado em ${dateStr}`;
+                    btn.textContent = '✅ Atualizado!';
+                    setTimeout(() => {
+                        btn.textContent = '🔄 Atualizar Preços';
+                        btn.disabled = false;
+                    }, 2000);
+                } catch (err) {
+                    alert(`Não foi possível atualizar o itemDB: ${err.message}`);
+                    btn.textContent = 'Tentar Novamente';
+                    btn.disabled = false;
+                }
+            });
+
+            // Restaurar Padrões
+            overlay.querySelector('#sn-btn-restore-tiers')?.addEventListener('click', () => {
+                tiers = JSON.parse(JSON.stringify(DEFAULT_PRICE_TIERS));
+                unpricedColor = DEFAULT_UNPRICED_COLOR;
+                const unpricedInput = overlay.querySelector('#sn-unpriced-color-input');
+                if (unpricedInput) unpricedInput.value = unpricedColor;
+                renderTiersRows();
+                updateAddButton();
+            });
+
+            // Fechar / Cancelar
+            overlay.querySelector('#sn-config-close-x')?.addEventListener('click', () => overlay.remove());
+            overlay.querySelector('#sn-btn-cancel-config')?.addEventListener('click', () => overlay.remove());
+
+            // Salvar Configurações
+            overlay.querySelector('#sn-btn-save-config')?.addEventListener('click', () => {
+                const unpricedInput = overlay.querySelector('#sn-unpriced-color-input');
+                if (unpricedInput) {
+                    unpricedColor = unpricedInput.value;
+                }
+
+                // Ordena faixas por valor ascendente
+                tiers.sort((a, b) => a.maxPrice - b.maxPrice);
+
+                const currentStorage = loadStorage();
+                currentStorage.priceTiers = tiers;
+                currentStorage.unpricedColor = unpricedColor;
+                saveStorage(currentStorage);
+
+                overlay.remove();
+
+                if (typeof onSavedCallback === 'function') {
+                    onSavedCallback(currentStorage);
+                }
+            });
+        }
+
+        renderModalContent();
+        document.body.appendChild(overlay);
     }
 
     const currentUrl = new URL(window.location.href);
@@ -493,7 +962,10 @@
                             Colecionados: <strong style="color: #4ade80;">${storage.totalCount || 0} selos</strong> | Última sync: <span>${lastSyncText}</span>
                         </div>
                     </div>
-                    <div style="display: flex; gap: 8px;">
+                    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                        <button id="sn-btn-open-price-config" class="sn-btn-primary" style="background: #4f46e5; font-size: 13px;">
+                            🎨 Faixas de Preço
+                        </button>
                         <button id="sn-btn-sync-all" class="sn-btn-primary" style="font-size: 13px;">
                             ⚡ Sincronizar Álbum Completo
                         </button>
@@ -510,6 +982,9 @@
                 target.parentNode.insertBefore(banner, target);
             }
 
+            document.getElementById('sn-btn-open-price-config')?.addEventListener('click', () => {
+                openPriceConfigModal();
+            });
             document.getElementById('sn-btn-sync-all')?.addEventListener('click', startFullSync);
         }
 
@@ -681,10 +1156,25 @@
                         badge.textContent = '✓ Colecionado';
                         item.appendChild(badge);
                     } else {
+                        const itemPrice = getItemPrice(itemName, itemSrc, storage.itemdbPrices);
+                        const tierColor = getItemTierColor(itemPrice, storage.priceTiers, storage.unpricedColor);
+                        const bgRgba = hexToRgba(tierColor, 0.14);
+                        const shadowRgba = hexToRgba(tierColor, 0.45);
+
                         item.classList.add('sn-item-missing');
+                        item.style.setProperty('--sn-tier-color', tierColor);
+                        item.style.setProperty('--sn-tier-bg', bgRgba);
+                        item.style.setProperty('--sn-tier-shadow', shadowRgba);
+
                         const badge = document.createElement('span');
                         badge.className = 'sn-badge-missing';
                         badge.textContent = '⭐ FALTANDO';
+                        badge.style.setProperty('background', tierColor, 'important');
+                        if (itemPrice !== null && !isNaN(itemPrice)) {
+                            badge.title = `Preço itemDB: ${formatNumber(itemPrice)} NP`;
+                        } else {
+                            badge.title = `Preço itemDB: Sem cotação recente`;
+                        }
                         item.appendChild(badge);
                     }
                 });
@@ -712,9 +1202,33 @@
                     if (isCollected) {
                         cell.classList.add('sn-item-collected');
                     } else {
+                        const itemPrice = getItemPrice(itemName, itemSrc, storage.itemdbPrices);
+                        const tierColor = getItemTierColor(itemPrice, storage.priceTiers, storage.unpricedColor);
+                        const bgRgba = hexToRgba(tierColor, 0.14);
+                        const shadowRgba = hexToRgba(tierColor, 0.45);
+
                         cell.classList.add('sn-item-missing');
+                        cell.style.setProperty('--sn-tier-color', tierColor);
+                        cell.style.setProperty('--sn-tier-bg', bgRgba);
+                        cell.style.setProperty('--sn-tier-shadow', shadowRgba);
+                        if (itemPrice !== null && !isNaN(itemPrice)) {
+                            cell.title = `Preço itemDB: ${formatNumber(itemPrice)} NP`;
+                        } else {
+                            cell.title = `Preço itemDB: Sem cotação recente`;
+                        }
                     }
                 });
+            }
+
+            function refreshOfficialShop() {
+                const updated = loadStorage();
+                Object.assign(storage, updated);
+                document.querySelectorAll('[data-sn-stamp-checked]').forEach(el => {
+                    el.removeAttribute('data-sn-stamp-checked');
+                    el.classList.remove('sn-item-missing', 'sn-item-collected');
+                    el.querySelectorAll('.sn-badge-missing, .sn-badge-collected').forEach(b => b.remove());
+                });
+                processOfficialShopItems();
             }
 
             processOfficialShopItems();
@@ -723,7 +1237,7 @@
             const observer = new MutationObserver(() => processOfficialShopItems());
             observer.observe(shopContainer, { childList: true, subtree: true });
 
-            renderFloatingBadge(shopInfo.name, storage);
+            renderFloatingBadge(shopInfo.name, storage, refreshOfficialShop);
         }
     }
 
@@ -829,7 +1343,7 @@
     }
 
     // Badge flutuante informativa no canto inferior da tela
-    function renderFloatingBadge(contextName, storage) {
+    function renderFloatingBadge(contextName, storage, onConfigSaved) {
         const old = document.getElementById('sn-floating-stamp-badge');
         if (old) old.remove();
 
@@ -847,10 +1361,16 @@
             <span style="color: #6b7280;">•</span>
             <span>${syncLabel}</span>
             <span style="color: #6b7280;">•</span>
+            <a href="javascript:void(0)" id="sn-floating-price-config" style="color: #a78bfa; text-decoration: underline; font-weight: 600;" title="Configurar cores por faixa de preço">🎨 Cores</a>
+            <span style="color: #6b7280;">•</span>
             <a href="/stamps.phtml" title="Ir para o Álbum de Selos">Abrir Álbum</a>
             <span id="sn-stamp-close-widget" style="margin-left: 6px; cursor: pointer; color: #9ca3af; font-size: 14px; line-height: 1;" title="Ocultar nesta página">&times;</span>
         `;
         document.body.appendChild(badge);
+
+        badge.querySelector('#sn-floating-price-config')?.addEventListener('click', () => {
+            openPriceConfigModal(onConfigSaved);
+        });
 
         const closeBtn = badge.querySelector('#sn-stamp-close-widget');
         if (closeBtn) {
@@ -866,5 +1386,21 @@
         setTimeout(stackFloatingWidgets, 1200);
         window.addEventListener('resize', stackFloatingWidgets);
     }
+
+    // =========================================================================
+    // INICIALIZAÇÃO GERAL E ATUALIZAÇÃO TRANSPARENTE DO ITEMDB
+    // =========================================================================
+
+    // Registra comando no menu Tampermonkey
+    if (typeof GM_registerMenuCommand !== 'undefined') {
+        GM_registerMenuCommand('🎨 Configurar Cores & Faixas de Preço (itemDB)', () => {
+            openPriceConfigModal();
+        });
+    }
+
+    // Verificação e atualização transparente de preços do itemDB em segundo plano (cache de 14 dias)
+    fetchItemdbPrices(false).catch(err => {
+        console.warn('[Scriptnautas Selos] Sincronização automática do itemDB em background:', err.message);
+    });
 
 })();
