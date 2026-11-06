@@ -1,17 +1,13 @@
 // ==UserScript==
 // @name         Neopets: Marcador de Lojas por Lista do itemDB (Wishlist Highlighter)
 // @namespace    https://github.com/t-moedano/scriptnautas
-// @version      1.0.1
+// @version      1.0.2
 // @description  Destaca itens da sua lista personalizada do itemDB em qualquer loja oficial ou loja de usuário do Neopets.
 // @author       t-moedano
 // @match        *://*.neopets.com/objects.phtml?*type=shop*
 // @match        *://*.neopets.com/browseshop.phtml*
-// @match        *://itemdb.com.br/lists/*
-// @match        *://itemdb.com.br/pt/lists/*
-// @match        *://itemdb.com.br/*lists/*
-// @match        *://*.itemdb.com.br/lists/*
-// @match        *://*.itemdb.com.br/pt/lists/*
-// @match        *://*.itemdb.com.br/*lists/*
+// @match        *://itemdb.com.br/*
+// @match        *://*.itemdb.com.br/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=itemdb.com.br
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -559,13 +555,17 @@
                 cursor: pointer;
                 text-decoration: none;
                 box-shadow: 0 4px 12px rgba(124, 58, 237, 0.35);
-                transition: transform 0.15s ease, box-shadow 0.15s ease;
+                transition: background 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
                 margin-left: 8px;
                 margin-bottom: 12px;
             }
             .sn-itemdb-page-btn:hover {
-                transform: translateY(-1px);
                 box-shadow: 0 6px 16px rgba(124, 58, 237, 0.5);
+                filter: brightness(1.08);
+            }
+            .sn-itemdb-page-btn:disabled {
+                opacity: 0.7;
+                cursor: not-allowed;
             }
 
             /* Topo Roxo no itemDB */
@@ -582,6 +582,7 @@
                 font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
                 padding: 10px 20px;
                 box-sizing: border-box;
+                min-height: 48px;
                 animation: snItemdbSlideDown 0.3s ease-out;
             }
             @keyframes snItemdbSlideDown {
@@ -639,16 +640,19 @@
                 font-family: system-ui, -apple-system, sans-serif;
                 font-weight: 700;
                 font-size: 12px;
-                padding: 7px 16px;
+                padding: 8px 16px;
                 border-radius: 8px;
                 border: none;
                 cursor: pointer;
                 box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-                transition: transform 0.15s ease, background 0.15s ease;
+                transition: background 0.15s ease, box-shadow 0.15s ease;
             }
             .sn-itemdb-btn-activate:hover {
-                transform: translateY(-1px);
-                background: #f8fafc;
+                background: #f1f5f9;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.28);
+            }
+            .sn-itemdb-btn-activate:active {
+                background: #e2e8f0;
             }
             .sn-itemdb-btn-activate:disabled {
                 opacity: 0.7;
@@ -1057,9 +1061,9 @@
     function initItemdbSiteIntegration() {
         injectStyles();
 
-        // 1. Detecta URL da lista (href ou pathname)
-        const parsed = parseItemdbListUrl(window.location.href) || parseItemdbListUrl(window.location.pathname);
-        if (!parsed) return;
+        let currentParsed = null;
+        let lastUrl = '';
+        let isSyncing = false;
 
         function getListTitle() {
             const h1El = document.querySelector('h1');
@@ -1067,126 +1071,250 @@
                 return h1El.textContent.trim();
             }
             const st = loadStorage();
-            if (st.activeList && st.activeList.slug === parsed.slug) {
+            if (currentParsed && st.activeList && st.activeList.slug === currentParsed.slug) {
                 return st.activeList.name;
             }
-            return parsed.slug.replace(/[-_]+/g, ' ');
+            return currentParsed ? currentParsed.slug.replace(/[-_]+/g, ' ') : 'Lista itemDB';
         }
 
         function ensureTopBanner() {
             let banner = document.getElementById('sn-itemdb-top-bar');
-            const storage = loadStorage();
-            const isActive = Boolean(storage.activeList &&
-                             storage.activeList.username.toLowerCase() === parsed.username.toLowerCase() &&
-                             storage.activeList.slug.toLowerCase() === parsed.slug.toLowerCase());
 
-            const listTitle = getListTitle();
+            if (!currentParsed) {
+                if (banner) banner.style.display = 'none';
+                return;
+            }
 
             if (!banner) {
                 banner = document.createElement('div');
                 banner.id = 'sn-itemdb-top-bar';
                 banner.className = 'sn-itemdb-top-bar';
+                banner.innerHTML = `
+                    <div class="sn-itemdb-bar-inner">
+                        <div class="sn-itemdb-bar-left">
+                            <span class="sn-itemdb-bar-badge">📜 Scriptnautas</span>
+                            <span class="sn-itemdb-bar-title">
+                                Lista do itemDB: <strong id="sn-itemdb-bar-name"></strong>
+                            </span>
+                            <span id="sn-itemdb-bar-status" class="sn-itemdb-status-pill" style="display: none;"></span>
+                        </div>
+                        <div class="sn-itemdb-bar-actions">
+                            <button id="sn-itemdb-activate-top-btn" class="sn-itemdb-btn-activate" type="button">
+                                ⭐ Destacar esta lista nas Lojas do Neopets
+                            </button>
+                        </div>
+                    </div>
+                `;
+
+                const btn = banner.querySelector('#sn-itemdb-activate-top-btn');
+                if (btn) {
+                    btn.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleActivation();
+                    });
+                }
 
                 if (document.body) {
                     document.body.prepend(banner);
                 } else if (document.documentElement) {
                     document.documentElement.prepend(banner);
                 }
+            } else {
+                if (banner.style.display === 'none') {
+                    banner.style.display = 'block';
+                }
             }
 
-            banner.innerHTML = `
-                <div class="sn-itemdb-bar-inner">
-                    <div class="sn-itemdb-bar-left">
-                        <span class="sn-itemdb-bar-badge">📜 Scriptnautas</span>
-                        <span class="sn-itemdb-bar-title">
-                            Lista do itemDB: <strong>${escapeHtml(listTitle)}</strong>
-                        </span>
-                        ${isActive ? `<span class="sn-itemdb-status-pill">✓ Ativa no Neopets (${storage.activeList.itemCount} itens)</span>` : ''}
-                    </div>
-                    <div class="sn-itemdb-bar-actions">
-                        <button id="sn-itemdb-activate-top-btn" class="sn-itemdb-btn-activate">
-                            ${isActive ? '🔄 Sincronizar Novamente' : '⭐ Destacar esta lista nas Lojas do Neopets'}
-                        </button>
-                    </div>
-                </div>
-            `;
+            updateBannerState(banner);
+        }
 
+        function updateBannerState(banner) {
+            if (!banner) banner = document.getElementById('sn-itemdb-top-bar');
+            if (!banner || !currentParsed) return;
+
+            const nameEl = banner.querySelector('#sn-itemdb-bar-name');
+            const statusEl = banner.querySelector('#sn-itemdb-bar-status');
             const btn = banner.querySelector('#sn-itemdb-activate-top-btn');
+
+            const storage = loadStorage();
+            const isActive = Boolean(storage.activeList &&
+                storage.activeList.username.toLowerCase() === currentParsed.username.toLowerCase() &&
+                storage.activeList.slug.toLowerCase() === currentParsed.slug.toLowerCase());
+
+            const listTitle = getListTitle();
+            if (nameEl && nameEl.textContent !== listTitle) {
+                nameEl.textContent = listTitle;
+            }
+
+            if (statusEl) {
+                if (isActive) {
+                    const statusText = `✓ Ativa no Neopets (${storage.activeList.itemCount} itens)`;
+                    if (statusEl.textContent !== statusText) {
+                        statusEl.textContent = statusText;
+                    }
+                    if (statusEl.style.display !== 'inline-flex') {
+                        statusEl.style.display = 'inline-flex';
+                    }
+                } else {
+                    if (statusEl.style.display !== 'none') {
+                        statusEl.style.display = 'none';
+                    }
+                }
+            }
+
             if (btn) {
-                btn.onclick = () => handleActivation(btn);
+                if (isSyncing) {
+                    btn.disabled = true;
+                    btn.textContent = '⏳ Sincronizando com Scriptnautas...';
+                } else {
+                    btn.disabled = false;
+                    const btnText = isActive ? '🔄 Sincronizar Novamente' : '⭐ Destacar esta lista nas Lojas do Neopets';
+                    if (btn.textContent !== btnText) {
+                        btn.textContent = btnText;
+                    }
+                    const btnBg = isActive ? '#f8fafc' : '#ffffff';
+                    if (btn.style.background !== btnBg) {
+                        btn.style.background = btnBg;
+                    }
+                }
             }
         }
 
         function ensureInlineButton() {
+            if (!currentParsed) {
+                const existing = document.getElementById('sn-itemdb-activate-btn');
+                if (existing) existing.remove();
+                return;
+            }
+
             const h1El = document.querySelector('h1');
-            if (!h1El) return;
+            if (!h1El || !h1El.parentElement) return;
 
             let btn = document.getElementById('sn-itemdb-activate-btn');
-            const storage = loadStorage();
-            const isActive = Boolean(storage.activeList &&
-                             storage.activeList.username.toLowerCase() === parsed.username.toLowerCase() &&
-                             storage.activeList.slug.toLowerCase() === parsed.slug.toLowerCase());
-
-            if (!btn) {
+            if (!btn || !document.contains(btn)) {
+                if (btn) btn.remove();
                 btn = document.createElement('button');
                 btn.id = 'sn-itemdb-activate-btn';
                 btn.className = 'sn-itemdb-page-btn';
-
-                if (h1El.parentElement) {
-                    h1El.parentElement.appendChild(btn);
-                }
+                btn.type = 'button';
+                btn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    handleActivation();
+                });
+                h1El.parentElement.appendChild(btn);
+            } else if (btn.parentElement !== h1El.parentElement) {
+                h1El.parentElement.appendChild(btn);
             }
 
-            btn.innerHTML = isActive ? '✓ Ativa no Neopets (Atualizar)' : '⭐ Destacar esta lista nas Lojas do Neopets';
-            if (isActive) {
-                btn.style.background = '#10b981';
-            } else {
-                btn.style.background = 'linear-gradient(135deg, #7c3aed, #9333ea)';
-            }
-
-            btn.onclick = () => handleActivation(btn);
+            updateInlineBtnState(btn);
         }
 
-        function handleActivation(triggerBtn) {
-            triggerBtn.disabled = true;
-            const originalText = triggerBtn.innerHTML;
-            triggerBtn.innerHTML = '⏳ Sincronizando com Scriptnautas...';
+        function updateInlineBtnState(btn) {
+            if (!btn) btn = document.getElementById('sn-itemdb-activate-btn');
+            if (!btn || !currentParsed) return;
+
+            if (isSyncing) {
+                btn.disabled = true;
+                btn.textContent = '⏳ Sincronizando com Scriptnautas...';
+                return;
+            }
+
+            btn.disabled = false;
+            const storage = loadStorage();
+            const isActive = Boolean(storage.activeList &&
+                storage.activeList.username.toLowerCase() === currentParsed.username.toLowerCase() &&
+                storage.activeList.slug.toLowerCase() === currentParsed.slug.toLowerCase());
+
+            const targetText = isActive ? '✓ Ativa no Neopets (Atualizar)' : '⭐ Destacar esta lista nas Lojas do Neopets';
+            if (btn.textContent !== targetText) {
+                btn.textContent = targetText;
+            }
+            const targetBg = isActive ? '#10b981' : 'linear-gradient(135deg, #7c3aed, #9333ea)';
+            if (btn.style.background !== targetBg) {
+                btn.style.background = targetBg;
+            }
+        }
+
+        function handleActivation() {
+            if (!currentParsed || isSyncing) return;
+
+            isSyncing = true;
+            updateBannerState();
+            updateInlineBtnState();
 
             const title = getListTitle();
+            const { username, slug } = currentParsed;
 
-            fetchListFromItemdb(parsed.username, parsed.slug, title)
+            fetchListFromItemdb(username, slug, title)
                 .then(result => {
-                    triggerBtn.innerHTML = '✓ Lista Ativa no Neopets!';
-                    triggerBtn.style.background = '#10b981';
+                    isSyncing = false;
                     showToast(`🚀 Lista "${result.name}" (${result.itemCount} itens) ativada nas Lojas do Neopets!`);
-
-                    ensureTopBanner();
-                    ensureInlineButton();
+                    updateBannerState();
+                    updateInlineBtnState();
                 })
                 .catch(err => {
-                    triggerBtn.disabled = false;
-                    triggerBtn.innerHTML = originalText;
+                    isSyncing = false;
                     alert(`Erro ao ativar lista: ${err.message}`);
+                    updateBannerState();
+                    updateInlineBtnState();
                 });
         }
 
-        ensureTopBanner();
-        ensureInlineButton();
+        function checkRoute() {
+            const currentUrl = window.location.href;
+            if (currentUrl === lastUrl) return;
+            lastUrl = currentUrl;
 
+            currentParsed = parseItemdbListUrl(window.location.href) || parseItemdbListUrl(window.location.pathname);
+            isSyncing = false;
+
+            ensureTopBanner();
+            ensureInlineButton();
+        }
+
+        // Intercepta navegações SPA do Next.js (pushState / replaceState / popstate)
+        const win = (typeof unsafeWindow !== 'undefined' ? unsafeWindow : window);
+        const wrapHistoryMethod = (type) => {
+            const orig = win.history[type];
+            if (typeof orig === 'function') {
+                win.history[type] = function(...args) {
+                    const result = orig.apply(this, args);
+                    setTimeout(checkRoute, 0);
+                    return result;
+                };
+            }
+        };
+        wrapHistoryMethod('pushState');
+        wrapHistoryMethod('replaceState');
+        win.addEventListener('popstate', () => setTimeout(checkRoute, 0));
+
+        // Polling rápido como fallback de segurança
+        setInterval(checkRoute, 250);
+
+        // Execução inicial
+        checkRoute();
+
+        // MutationObserver para garantir que botões permaneçam na tela se o Next.js re-renderizar o DOM
         let debounceTimer = null;
         const obs = new MutationObserver(() => {
             if (debounceTimer) clearTimeout(debounceTimer);
             debounceTimer = setTimeout(() => {
-                ensureTopBanner();
-                ensureInlineButton();
-            }, 120);
+                if (currentParsed) {
+                    ensureTopBanner();
+                    ensureInlineButton();
+                }
+            }, 150);
         });
 
         if (document.body) {
             obs.observe(document.body, { childList: true, subtree: true });
         } else {
             window.addEventListener('DOMContentLoaded', () => {
-                obs.observe(document.body, { childList: true, subtree: true });
+                if (document.body) {
+                    obs.observe(document.body, { childList: true, subtree: true });
+                }
             });
         }
     }
