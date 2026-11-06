@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Neopets: Rastreador de Selos & Marcador de Lojas
 // @namespace    https://github.com/t-moedano/scriptnautas
-// @version      1.0.0
+// @version      1.0.1
 // @description  Rastreia selos, moedas e conchas colecionados no seu Álbum de Selos do Neopets e destaca itens faltantes em lojas oficiais (Post Office, Coin Shop, Sea Shells) e lojas de usuários.
 // @author       t-moedano
 // @match        *://*.neopets.com/stamps.phtml*
@@ -30,13 +30,18 @@
     const OFFICIAL_STAMP_SHOPS = {
         58: { name: 'Neopian Post Office', category: 'Selos' },
         68: { name: 'Coin Shop', category: 'Moedas' },
-        86: { name: 'Sea Shells', category: 'Conchas' }
+        88: { name: 'Sea Shells', category: 'Conchas' }
     };
 
     // Palavras-chave para identificar itens de álbum em lojas de usuários sem confundir com comida/brinquedos
     const ALBUM_ITEM_KEYWORDS = [
         'stamp', 'coin', 'coins', 'shell', 'scarab', 'coconut', 'charm', 'golden dubloon'
     ];
+
+    // Mapeamento de fallback para itens novos conhecidos cujo alt/title venha vazio da TNT
+    const KNOWN_HASH_FALLBACKS = {
+        'ba70c82b0047e6': 'Library Faerie Coin'
+    };
 
     // =========================================================================
     // UTILITÁRIOS
@@ -45,7 +50,6 @@
     function normalizeTitle(text) {
         if (!text) return '';
         return text
-            .replace(/^[\d]+\.\s*/, '')
             .replace(/&amp;/gi, '&')
             .replace(/&#039;|&apos;/gi, "'")
             .replace(/&quot;/gi, '"')
@@ -54,6 +58,12 @@
             .replace(/\s+/g, ' ')
             .trim()
             .toLowerCase();
+    }
+
+    function extractItemHash(src) {
+        if (!src) return null;
+        const match = src.match(/\/items\/([^\/\.]+)\.(?:gif|png)/i);
+        return match ? match[1].toLowerCase() : null;
     }
 
     function isLikelyAlbumItem(name) {
@@ -100,37 +110,55 @@
                     username: null,
                     lastSync: null,
                     totalCount: 0,
+                    uniqueCount: 0,
                     pages: {},
-                    stamps: {}
+                    stamps: {},
+                    stampImages: {}
                 };
             }
-            return JSON.parse(raw);
+            const data = JSON.parse(raw);
+            data.stampImages = data.stampImages || {};
+            return data;
         } catch (e) {
             console.error('[Scriptnautas Selos] Erro ao carregar storage:', e);
-            return { username: null, lastSync: null, totalCount: 0, pages: {}, stamps: {} };
+            return { username: null, lastSync: null, totalCount: 0, uniqueCount: 0, pages: {}, stamps: {}, stampImages: {} };
         }
     }
 
     function saveStorage(data) {
         try {
-            // Recalcula contagem e lista consolidada
             const consolidated = {};
-            let count = 0;
+            const consolidatedImages = {};
+            let totalSlotsCount = 0;
+            let uniqueCount = 0;
+
             if (data.pages) {
                 Object.values(data.pages).forEach(pageStamps => {
                     if (Array.isArray(pageStamps)) {
-                        pageStamps.forEach(s => {
-                            const norm = normalizeTitle(s);
-                            if (norm && !consolidated[norm]) {
-                                consolidated[norm] = true;
-                                count++;
+                        totalSlotsCount += pageStamps.length;
+                        pageStamps.forEach(item => {
+                            const itemName = typeof item === 'string' ? item : item?.name;
+                            const itemImg = typeof item === 'object' ? item?.imgKey : null;
+
+                            if (itemName) {
+                                const norm = normalizeTitle(itemName);
+                                if (norm && !consolidated[norm]) {
+                                    consolidated[norm] = true;
+                                    uniqueCount++;
+                                }
+                            }
+                            if (itemImg) {
+                                consolidatedImages[itemImg.toLowerCase()] = true;
                             }
                         });
                     }
                 });
             }
             data.stamps = consolidated;
-            data.totalCount = count;
+            data.stampImages = consolidatedImages;
+            // O Neopets conta o total oficial de selos colados em todas as páginas do álbum
+            data.totalCount = totalSlotsCount;
+            data.uniqueCount = uniqueCount;
 
             const raw = JSON.stringify(data);
             if (typeof GM_setValue !== 'undefined') {
@@ -142,6 +170,24 @@
         } catch (e) {
             console.error('[Scriptnautas Selos] Erro ao salvar storage:', e);
         }
+    }
+
+    // Checa se o item já foi colecionado (por NOME normalizado ou pelo HASH da IMAGEM)
+    function isCollectedItem(itemName, itemSrc, collectedSet, imageSet) {
+        if (itemName) {
+            const norm = normalizeTitle(itemName);
+            if (collectedSet.has(norm)) return true;
+        }
+        if (itemSrc) {
+            const hash = extractItemHash(itemSrc);
+            if (hash && (imageSet[hash] || KNOWN_HASH_FALLBACKS[hash])) {
+                const fallbackName = KNOWN_HASH_FALLBACKS[hash];
+                if (imageSet[hash] || (fallbackName && collectedSet.has(normalizeTitle(fallbackName)))) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     // =========================================================================
@@ -303,24 +349,57 @@
         // Extrai selos colados de um Document ou Container
         function extractStampsFromDoc(rootDoc) {
             const stamps = [];
-            // O Neopets coloca os selos em uma tabela centralizada 450x450
-            const images = rootDoc.querySelectorAll('.content table img, table[width="450"] img');
-            images.forEach(img => {
-                const src = img.getAttribute('src') || '';
-                const alt = img.getAttribute('alt') || '';
-                const title = img.getAttribute('title') || '';
-                const name = alt || title;
 
-                // Ignora slots vazios, bordas e setas
-                if (!name || name === 'No Stamp' || src.includes('no_stamp.gif') || src.includes('stamp_blank.gif') || src.includes('transparent_spacer.gif')) {
+            // As células dos selos têm width="90" ou estão na tabela central de 450px
+            const cells = rootDoc.querySelectorAll('table[width="450"] td, .content table td[width="90"], table[width="450"] img, .content table img');
+
+            cells.forEach(el => {
+                const img = el.tagName === 'IMG' ? el : el.querySelector('img');
+                if (!img) return;
+
+                const src = img.getAttribute('src') || '';
+                // Ignora slots vazios, bordas, espaçadores e setas
+                if (!src || src.includes('no_stamp.gif') || src.includes('stamp_blank.gif') || src.includes('transparent_spacer.gif')) {
                     return;
                 }
-                // Ignora ícones de navegação
                 if (src.includes('arrow-') || src.includes('question_mark')) return;
 
-                stamps.push(name.trim());
+                let name = (img.getAttribute('alt') || img.getAttribute('title') || el.getAttribute?.('title') || '').trim();
+                const imgKey = extractItemHash(src);
+
+                // Se explicitamente for "No Stamp", ignora
+                if (name === 'No Stamp') return;
+
+                // Fallback para itens com hash sem nome no HTML da TNT
+                if (!name && imgKey && KNOWN_HASH_FALLBACKS[imgKey]) {
+                    name = KNOWN_HASH_FALLBACKS[imgKey];
+                }
+
+                // Se ainda assim não tiver nome, mas é um item válido no slot
+                if (!name && imgKey) {
+                    name = imgKey;
+                }
+
+                if (name || imgKey) {
+                    stamps.push({
+                        name: name || imgKey,
+                        imgKey: imgKey
+                    });
+                }
             });
-            return stamps;
+
+            // Evita duplicação caso tenhamos selecionado tanto td quanto img
+            const uniqueStamps = [];
+            const seen = new Set();
+            stamps.forEach(s => {
+                const key = `${s.name}|${s.imgKey}`;
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    uniqueStamps.push(s);
+                }
+            });
+
+            return uniqueStamps;
         }
 
         // Descobre todas as páginas de selos disponíveis no menu de navegação
@@ -339,9 +418,9 @@
                 }
             });
 
-            // Se não encontrou links (ex: página inicial do álbum), gera de 0 a 53 como fallback
-            if (pageMap.size === 0) {
-                for (let i = 0; i <= 53; i++) {
+            // Garante que páginas de 0 a 53 estejam mapeadas mesmo se o menu estiver oculto
+            for (let i = 0; i <= 53; i++) {
+                if (!pageMap.has(i)) {
                     pageMap.set(i, `Página ${i}`);
                 }
             }
@@ -406,7 +485,6 @@
                 </div>
             `;
 
-            // Procura o melhor local para injetar (abaixo do submenu de navegação do álbum)
             const target = document.querySelector('.content table[width="450"]') ||
                            document.querySelector('.content p') ||
                            document.querySelector('.content') ||
@@ -425,7 +503,6 @@
             const pageIds = Array.from(pageMap.keys()).sort((a, b) => a - b);
             const total = pageIds.length;
 
-            // Cria Modal de Progresso
             const overlay = document.createElement('div');
             overlay.className = 'sn-sync-modal-overlay';
             overlay.innerHTML = `
@@ -452,11 +529,12 @@
             storage.pages = storage.pages || {};
 
             let completed = 0;
-            const batchSize = 2; // 2 requisições paralelas por vez (equilíbrio perfeito velocidade x segurança)
-            const delayBetweenBatches = 150; // ms
+            const batchSize = 2;
+            const delayBetweenBatches = 150;
+            const ownerParam = requestedOwner || currentUser || '';
 
             async function fetchPage(pageId) {
-                const url = `/stamps.phtml?type=album&page_id=${pageId}`;
+                const url = `/stamps.phtml?type=album&page_id=${pageId}${ownerParam ? '&owner=' + encodeURIComponent(ownerParam) : ''}`;
                 try {
                     const response = await fetch(url, { credentials: 'include' });
                     const html = await response.text();
@@ -513,7 +591,8 @@
             const shopInfo = OFFICIAL_STAMP_SHOPS[objType];
             const storage = loadStorage();
             const collectedSet = new Set(Object.keys(storage.stamps || {}));
-            const hasData = collectedSet.size > 0;
+            const imageSet = storage.stampImages || {};
+            const hasData = (storage.totalCount || 0) > 0;
 
             function processOfficialShopItems() {
                 if (!hasData) return;
@@ -525,10 +604,10 @@
                     const img = item.querySelector('.item-img');
                     const nameEl = item.querySelector('.item-name b, .item-name');
                     const itemName = img?.getAttribute('data-name') || nameEl?.textContent || '';
-                    if (!itemName) return;
+                    const itemSrc = img?.getAttribute('src') || '';
+                    if (!itemName && !itemSrc) return;
 
-                    const norm = normalizeTitle(itemName);
-                    const isCollected = collectedSet.has(norm);
+                    const isCollected = isCollectedItem(itemName, itemSrc, collectedSet, imageSet);
 
                     if (isCollected) {
                         item.classList.add('sn-item-collected');
@@ -553,11 +632,12 @@
                     if (!cell) return;
 
                     const nameEl = cell.querySelector('b');
+                    const img = cell.querySelector('img');
                     const itemName = nameEl ? nameEl.textContent : '';
-                    if (!itemName) return;
+                    const itemSrc = img ? img.getAttribute('src') : '';
+                    if (!itemName && !itemSrc) return;
 
-                    const norm = normalizeTitle(itemName);
-                    const isCollected = collectedSet.has(norm);
+                    const isCollected = isCollectedItem(itemName, itemSrc, collectedSet, imageSet);
 
                     if (isCollected) {
                         cell.classList.add('sn-item-collected');
@@ -569,12 +649,10 @@
 
             processOfficialShopItems();
 
-            // Observador de mutações para suportar restock dinâmico
             const shopContainer = document.querySelector('.shop-grid, #container__2020') || document.body;
             const observer = new MutationObserver(() => processOfficialShopItems());
             observer.observe(shopContainer, { childList: true, subtree: true });
 
-            // Badge flutuante de status
             renderFloatingBadge(shopInfo.name, storage);
         }
     }
@@ -587,12 +665,12 @@
 
         const storage = loadStorage();
         const collectedSet = new Set(Object.keys(storage.stamps || {}));
-        const hasData = collectedSet.size > 0;
+        const imageSet = storage.stampImages || {};
+        const hasData = (storage.totalCount || 0) > 0;
 
         function processUserShopItems() {
             if (!hasData) return;
 
-            // Encontra itens da loja do usuário (links buy_item.phtml)
             const buyLinks = document.querySelectorAll('a[href*="buy_item.phtml"]:not([data-sn-stamp-checked])');
             buyLinks.forEach(link => {
                 link.setAttribute('data-sn-stamp-checked', 'true');
@@ -600,14 +678,14 @@
                 if (!cell) return;
 
                 const boldEl = cell.querySelector('b');
-                const itemName = boldEl ? boldEl.textContent.trim() : (link.querySelector('img')?.getAttribute('alt') || '');
-                if (!itemName) return;
+                const img = cell.querySelector('img');
+                const itemName = boldEl ? boldEl.textContent.trim() : (img?.getAttribute('alt') || '');
+                const itemSrc = img ? img.getAttribute('src') : '';
+                if (!itemName && !itemSrc) return;
 
-                const norm = normalizeTitle(itemName);
-                const isCollected = collectedSet.has(norm);
+                const isCollected = isCollectedItem(itemName, itemSrc, collectedSet, imageSet);
 
                 if (isCollected) {
-                    // Já colecionado: escurece para facilitar sniping de itens faltantes
                     cell.classList.add('sn-item-collected');
                     const badge = document.createElement('span');
                     badge.className = 'sn-badge-collected';
@@ -615,7 +693,6 @@
                     cell.style.position = 'relative';
                     cell.appendChild(badge);
                 } else if (isLikelyAlbumItem(itemName)) {
-                    // Item de álbum que o usuário NÃO tem colecionado: destaca em verde!
                     cell.classList.add('sn-item-missing');
                     const badge = document.createElement('span');
                     badge.className = 'sn-badge-missing';
