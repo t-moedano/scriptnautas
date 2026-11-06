@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Neopets: Rastreador de Selos & Marcador de Lojas
 // @namespace    https://github.com/t-moedano/scriptnautas
-// @version      1.0.3
+// @version      1.0.4
 // @description  Rastreia selos, moedas e conchas colecionados no seu Álbum de Selos do Neopets e destaca itens faltantes em lojas oficiais (Post Office, Coin Shop, Sea Shells) e lojas de usuários.
 // @author       t-moedano
 // @match        *://*.neopets.com/stamps.phtml*
@@ -30,13 +30,8 @@
     const OFFICIAL_STAMP_SHOPS = {
         58: { name: 'Neopian Post Office', category: 'Selos' },
         68: { name: 'Coin Shop', category: 'Moedas' },
-        88: { name: 'Sea Shells', category: 'Conchas' }
+        86: { name: 'Sea Shells', category: 'Conchas' }
     };
-
-    // Palavras-chave para identificar itens de álbum em lojas de usuários sem confundir com comida/brinquedos
-    const ALBUM_ITEM_KEYWORDS = [
-        'stamp', 'coin', 'coins', 'shell', 'scarab', 'coconut', 'charm', 'golden dubloon'
-    ];
 
     // =========================================================================
     // UTILITÁRIOS
@@ -59,14 +54,6 @@
         if (!src) return null;
         const match = src.match(/\/items\/([^\/\.]+)\.(?:gif|png)/i);
         return match ? match[1].toLowerCase() : null;
-    }
-
-    function isLikelyAlbumItem(name) {
-        const lower = name.toLowerCase();
-        return ALBUM_ITEM_KEYWORDS.some(keyword => {
-            const regex = new RegExp(`\\b${keyword}\\b`, 'i');
-            return regex.test(lower);
-        });
     }
 
     function getLoggedInUsername() {
@@ -733,6 +720,31 @@
         function processUserShopItems() {
             if (!hasData) return;
 
+            // Layout moderno de loja de usuário (.bsp-item)
+            const modernItems = document.querySelectorAll('.bsp-item:not([data-sn-stamp-checked])');
+            modernItems.forEach(item => {
+                item.setAttribute('data-sn-stamp-checked', 'true');
+                const btn = item.querySelector('.bsp-item__buy');
+                const nameSpan = item.querySelector('.bsp-item__name');
+                const img = item.querySelector('.bsp-item__image');
+                const itemName = btn?.getAttribute('data-name') || nameSpan?.textContent || '';
+                const itemSrc = img?.getAttribute('src') || '';
+                if (!itemName && !itemSrc) return;
+
+                const isCollected = isCollectedItem(itemName, itemSrc, collectedSet, imageSet);
+
+                // Apenas se o item for confirmado como já colecionado nós escurecemos
+                // Demais itens permanecem inalterados (comidas, poções, brinquedos, etc.)
+                if (isCollected) {
+                    item.classList.add('sn-item-collected');
+                    const badge = document.createElement('span');
+                    badge.className = 'sn-badge-collected';
+                    badge.textContent = '✓ Colecionado';
+                    item.appendChild(badge);
+                }
+            });
+
+            // Layout clássico (links buy_item.phtml)
             const buyLinks = document.querySelectorAll('a[href*="buy_item.phtml"]:not([data-sn-stamp-checked])');
             buyLinks.forEach(link => {
                 link.setAttribute('data-sn-stamp-checked', 'true');
@@ -752,13 +764,6 @@
                     const badge = document.createElement('span');
                     badge.className = 'sn-badge-collected';
                     badge.textContent = '✓ Colecionado';
-                    cell.style.position = 'relative';
-                    cell.appendChild(badge);
-                } else if (isLikelyAlbumItem(itemName)) {
-                    cell.classList.add('sn-item-missing');
-                    const badge = document.createElement('span');
-                    badge.className = 'sn-badge-missing';
-                    badge.textContent = '⭐ FALTANDO';
                     cell.style.position = 'relative';
                     cell.appendChild(badge);
                 }

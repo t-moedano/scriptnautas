@@ -19,9 +19,7 @@ Script para Tampermonkey que rastreia os selos, moedas e conchas já colecionado
    - Destaca itens **faltantes** com borda verde brilhante e tag `⭐ FALTANDO`.
    - Marca itens **já colecionados** com opacidade reduzida e tag `✓ Colecionado`.
 4. **Lojas de Usuários (`browseshop.phtml`)**:
-   - Filtro inteligente: reconhece selos, moedas, conchas, escaravelhos e cocos.
-   - Destaca colecionáveis faltantes para sniping rápido no Shop Wizard.
-   - Escurece os que você já possui colados.
+   - **Filtro seguro**: escurece apenas os itens que você **tem certeza que já colecionou** no seu álbum com tag `✓ Colecionado`. Não altera itens não colecionados (evitando falsos positivos com comidas, poções, brinquedos, etc.).
 5. **Zero Lag / 0ms de Atraso**:
    - Funciona em modo *Cache-First*: nas lojas, o script nunca faz requisições de rede lentas; a verificação é instantânea na memória do navegador.
 
