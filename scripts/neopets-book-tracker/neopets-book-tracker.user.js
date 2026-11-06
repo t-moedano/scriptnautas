@@ -1,14 +1,14 @@
-﻿// ==UserScript==
+// ==UserScript==
 // @name         Neopets: Rastreador de Livros & Marcador de Lojas
 // @namespace    https://github.com/t-moedano/scriptnautas
-// @version      1.0.0
+// @version      1.0.1
 // @description  Rastreia livros lidos (normais e Booktastic) e destaca livros não lidos em lojas oficiais ou marca livros já lidos em lojas de usuários no Neopets.
 // @author       t-moedano
-// @match        https://www.neopets.com/books_read.phtml*
-// @match        https://www.neopets.com/objects.phtml?*type=shop*
-// @match        https://www.neopets.com/browseshop.phtml*
+// @match        *://*.neopets.com/books_read.phtml*
+// @match        *://*.neopets.com/objects.phtml?*type=shop*
+// @match        *://*.neopets.com/browseshop.phtml*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=neopets.com
-// @grant        none
+// @grant        unsafeWindow
 // @run-at       document-end
 // @updateURL    https://raw.githubusercontent.com/t-moedano/scriptnautas/main/scripts/neopets-book-tracker/neopets-book-tracker.user.js
 // @downloadURL  https://raw.githubusercontent.com/t-moedano/scriptnautas/main/scripts/neopets-book-tracker/neopets-book-tracker.user.js
@@ -20,6 +20,9 @@
     'use strict';
 
     const STORAGE_KEY = 'neopets_books_storage_v3';
+
+    // Acesso seguro ao contexto global (MAIN world) para acessar __booksReadConfig
+    const pageWindow = (typeof unsafeWindow !== 'undefined' ? unsafeWindow : window);
 
     // IDs de lojas oficiais que vendem exclusivamente livros / pergaminhos
     const OFFICIAL_BOOK_SHOPS = {
@@ -70,12 +73,16 @@
     const pathname = currentUrl.pathname;
     const searchParams = currentUrl.searchParams;
 
-    // Injeta estilos CSS para os marcadores
+    // Injeta estilos CSS para os marcadores e notificações
     function injectStyles() {
         if (document.getElementById('scriptnautas-book-styles')) return;
         const style = document.createElement('style');
         style.id = 'scriptnautas-book-styles';
         style.textContent = `
+            @keyframes snFadeIn {
+                from { opacity: 0; transform: translate(-50%, -10px); }
+                to { opacity: 1; transform: translate(-50%, 0); }
+            }
             .sn-badge-unread {
                 position: absolute;
                 top: 4px;
@@ -149,6 +156,26 @@
                 text-decoration: underline;
                 font-weight: 600;
             }
+            .sn-sync-toast {
+                position: fixed;
+                top: 75px;
+                left: 50%;
+                transform: translateX(-50%);
+                background: #064e3b;
+                color: #ecfdf5;
+                border: 2px solid #10b981;
+                padding: 14px 22px;
+                border-radius: 12px;
+                font-family: system-ui, -apple-system, sans-serif;
+                font-size: 14px;
+                font-weight: 500;
+                box-shadow: 0 12px 35px rgba(0, 0, 0, 0.6);
+                z-index: 99999999;
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                animation: snFadeIn 0.3s ease-out;
+            }
         `;
         document.head.appendChild(style);
     }
@@ -159,14 +186,15 @@
     if (pathname.includes('books_read.phtml')) {
         injectStyles();
 
-        setTimeout(() => {
+        // Extrai a lista de livros lidos usando múltiplos fallbacks resilientes
+        function syncBooksRead() {
             let petName = searchParams.get('pet_name') || '';
-            const isBooktastic = searchParams.get('tab') === 'booktastic';
+            const isBooktastic = searchParams.get('tab') === 'booktastic' || currentUrl.href.includes('tab=booktastic');
             const tabKey = isBooktastic ? 'booktastic' : 'regular';
             const bookTitles = new Set();
 
-            // 1.1 Tentar extrair do objeto global de configuração da página (Vue.js Neopets moderno)
-            const pageConfig = window.__booksReadConfig;
+            // 1.1 Tentativa Principal: Variável global injetada pelo Neopets moderno
+            const pageConfig = pageWindow.__booksReadConfig || window.__booksReadConfig;
             if (pageConfig) {
                 if (pageConfig.currentPet && !petName) {
                     petName = pageConfig.currentPet;
@@ -178,24 +206,37 @@
                 }
             }
 
-            // 1.2 Fallback: Tentar extrair via script tags se window.__booksReadConfig não estiver no escopo direto
+            // 1.2 Fallback: Inspeção de scripts embutidos no DOM (caso contexto isolado do Tampermonkey)
             if (bookTitles.size === 0) {
                 const scripts = document.querySelectorAll('script');
                 for (const s of scripts) {
                     const text = s.textContent || '';
                     if (text.includes('__booksReadConfig')) {
-                        const match = text.match(/__booksReadConfig\s*=\s*(\{.+?\});/s);
-                        if (match && match[1]) {
-                            try {
-                                const parsed = JSON.parse(match[1]);
-                                if (parsed.currentPet && !petName) petName = parsed.currentPet;
-                                if (Array.isArray(parsed.books)) {
-                                    parsed.books.forEach(b => {
-                                        if (b && b.name) bookTitles.add(b.name.trim());
-                                    });
+                        const marker = '__booksReadConfig';
+                        const idx = text.indexOf(marker);
+                        if (idx !== -1) {
+                            const jsonStart = text.indexOf('{', idx);
+                            const appIdx = text.indexOf('window.app', jsonStart);
+                            let jsonEnd = -1;
+                            if (appIdx !== -1) {
+                                jsonEnd = text.lastIndexOf('}', appIdx);
+                            } else {
+                                const scriptEnd = text.indexOf('</script>', jsonStart);
+                                jsonEnd = text.lastIndexOf('}', scriptEnd !== -1 ? scriptEnd : text.length);
+                            }
+                            if (jsonStart !== -1 && jsonEnd !== -1 && jsonEnd > jsonStart) {
+                                try {
+                                    const rawJson = text.slice(jsonStart, jsonEnd + 1);
+                                    const parsed = JSON.parse(rawJson);
+                                    if (parsed.currentPet && !petName) petName = parsed.currentPet;
+                                    if (Array.isArray(parsed.books)) {
+                                        parsed.books.forEach(b => {
+                                            if (b && b.name) bookTitles.add(b.name.trim());
+                                        });
+                                    }
+                                } catch (e) {
+                                    console.warn('[Scriptnautas] Falha no parse JSON slice:', e);
                                 }
-                            } catch (e) {
-                                console.warn('[Scriptnautas] Falha no parse do script config:', e);
                             }
                         }
                     }
@@ -204,7 +245,7 @@
 
             // 1.3 Fallback: Leitura direta do DOM (Tabelas clássicas ou divs)
             if (bookTitles.size === 0) {
-                const legacyElements = document.querySelectorAll('table td b, .content td b, .grid-item b');
+                const legacyElements = document.querySelectorAll('table td b, .content td b, .grid-item b, .book-title');
                 legacyElements.forEach(el => {
                     const txt = el.textContent ? el.textContent.trim() : '';
                     if (txt && !txt.match(/^[0-9]+$/) && txt.length > 2) {
@@ -213,8 +254,9 @@
                 });
             }
 
+            // Se o nome do pet não foi extraído do config nem dos parâmetros, tenta o cabeçalho/título
             if (!petName) {
-                const petTitle = document.querySelector('.content h2, .header-text, title');
+                const petTitle = document.querySelector('.page-title__2020 h1, .content h2, .header-text, title');
                 if (petTitle && petTitle.textContent) {
                     const m = petTitle.textContent.match(/pet_name=([a-zA-Z0-9_]+)/) || petTitle.textContent.match(/([a-zA-Z0-9_]+)\s+(has read|já leu)/i);
                     if (m && m[1]) petName = m[1];
@@ -223,7 +265,7 @@
 
             if (!petName) petName = 'Neopet';
 
-            // Salva no banco local
+            // Salva dados no LocalStorage
             const storage = loadStorage();
             if (!storage.pets[petName]) {
                 storage.pets[petName] = { regular: [], booktastic: [], lastUpdated: 0 };
@@ -235,30 +277,97 @@
             storage.activePet = petName;
             saveStorage(storage);
 
-            // Notificação visual no topo da página
+            const tabName = isBooktastic ? 'Booktastic' : 'Livros Padrão';
+
+            // 1. Toast Flutuante no Centro Superior (garantido visível em qualquer tema e resolução)
+            showSyncToast(petName, tabName, currentList.length);
+
+            // 2. Banner embutido no corpo da página (abaixo do cabeçalho)
+            injectInlineBanner(petName, tabName, currentList.length);
+
+            console.log(`[Scriptnautas] ${currentList.length} livros salvos com sucesso para ${petName} (${tabKey}).`);
+        }
+
+        // Exibe o Toast Flutuante com auto-dismiss
+        function showSyncToast(petName, tabName, count) {
+            const oldToast = document.getElementById('sn-sync-toast');
+            if (oldToast) oldToast.remove();
+
+            const toast = document.createElement('div');
+            toast.id = 'sn-sync-toast';
+            toast.className = 'sn-sync-toast';
+            toast.innerHTML = `
+                <span style="font-size: 24px;">📚</span>
+                <div>
+                    <div style="font-weight: 700; color: #34d399; font-size: 15px;">Scriptnautas: Sincronizado com Sucesso!</div>
+                    <div style="font-size: 13px; color: #ecfdf5;">
+                        Foram salvos <strong>${count}</strong> livros da aba <em>${tabName}</em> para <strong>${petName}</strong>.
+                    </div>
+                </div>
+                <button type="button" style="background: none; border: none; color: #a7f3d0; font-size: 18px; cursor: pointer; margin-left: 14px; padding: 0 4px;" title="Fechar">✕</button>
+            `;
+
+            const closeBtn = toast.querySelector('button');
+            if (closeBtn) closeBtn.onclick = () => toast.remove();
+
+            document.body.appendChild(toast);
+
+            setTimeout(() => {
+                if (toast.parentElement) {
+                    toast.style.transition = 'opacity 0.4s ease, transform 0.4s ease';
+                    toast.style.opacity = '0';
+                    toast.style.transform = 'translate(-50%, -10px)';
+                    setTimeout(() => toast.remove(), 400);
+                }
+            }, 7000);
+        }
+
+        // Insere o banner integrado na estrutura visível da página
+        function injectInlineBanner(petName, tabName, count) {
+            const oldBanner = document.getElementById('sn-inline-banner');
+            if (oldBanner) oldBanner.remove();
+
             const banner = document.createElement('div');
+            banner.id = 'sn-inline-banner';
             banner.style.cssText = `
-                background: #065f46;
+                background: #064e3b;
                 color: #ecfdf5;
                 padding: 12px 18px;
                 border-radius: 8px;
                 margin: 15px auto;
-                max-width: 780px;
+                max-width: 820px;
                 text-align: center;
                 font-family: system-ui, sans-serif;
                 font-size: 14px;
                 box-shadow: 0 4px 6px rgba(0,0,0,0.15);
                 border: 1px solid #10b981;
             `;
-            const tabName = isBooktastic ? 'Booktastic' : 'Livros Padrão';
             banner.innerHTML = `
-                <strong>📚 Scriptnautas:</strong> Sincronizado com sucesso! Foram salvos <strong>${currentList.length}</strong> livros da aba <em>${tabName}</em> para <strong>${petName}</strong>.
+                <strong>📚 Scriptnautas:</strong> Sincronizado com sucesso! Foram salvos <strong>${count}</strong> livros da aba <em>${tabName}</em> para <strong>${petName}</strong>.
             `;
-            const mainContainer = document.querySelector('.content, #container, .page-content') || document.body;
-            mainContainer.insertBefore(banner, mainContainer.firstChild);
 
-            console.log(`[Scriptnautas] ${currentList.length} livros salvos para ${petName} (${tabKey}).`);
-        }, 350);
+            // Procura o container visível da página (2020 moderno ou clássico)
+            const targetContainer = document.querySelector('.page-title__2020') ||
+                                    document.getElementById('books-read-app') ||
+                                    document.getElementById('container__2020') ||
+                                    document.querySelector('.content') ||
+                                    document.getElementById('container');
+
+            if (targetContainer) {
+                if (targetContainer.classList.contains('page-title__2020')) {
+                    targetContainer.insertAdjacentElement('afterend', banner);
+                } else {
+                    targetContainer.insertBefore(banner, targetContainer.firstChild);
+                }
+            }
+        }
+
+        // Executa com tolerância a carregamento dinâmico
+        if (document.readyState === 'complete') {
+            syncBooksRead();
+        } else {
+            window.addEventListener('load', () => setTimeout(syncBooksRead, 250));
+        }
     }
 
     // =========================================================================
