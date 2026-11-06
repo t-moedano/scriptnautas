@@ -1,13 +1,15 @@
 // ==UserScript==
 // @name         Neopets: Rastreador de Livros & Marcador de Lojas
 // @namespace    https://github.com/t-moedano/scriptnautas
-// @version      1.0.1
+// @version      1.0.2
 // @description  Rastreia livros lidos (normais e Booktastic) e destaca livros não lidos em lojas oficiais ou marca livros já lidos em lojas de usuários no Neopets.
 // @author       t-moedano
 // @match        *://*.neopets.com/books_read.phtml*
 // @match        *://*.neopets.com/objects.phtml?*type=shop*
 // @match        *://*.neopets.com/browseshop.phtml*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=neopets.com
+// @grant        GM_setValue
+// @grant        GM_getValue
 // @grant        unsafeWindow
 // @run-at       document-end
 // @updateURL    https://raw.githubusercontent.com/t-moedano/scriptnautas/main/scripts/neopets-book-tracker/neopets-book-tracker.user.js
@@ -19,7 +21,7 @@
 (function() {
     'use strict';
 
-    const STORAGE_KEY = 'neopets_books_storage_v3';
+    const STORAGE_KEY = 'neopets_books_storage_v4';
 
     // Acesso seguro ao contexto global (MAIN world) para acessar __booksReadConfig
     const pageWindow = (typeof unsafeWindow !== 'undefined' ? unsafeWindow : window);
@@ -36,36 +38,96 @@
         114: 'Moltaran Books'
     };
 
-    // Normalização para comparação sem problemas de case e pontuação especial
+    // Normalização para comparação sem problemas de case, espaços ou pontuação especial
     function normalizeTitle(text) {
         if (!text) return '';
         return text
             .replace(/^[\d]+\.\s*/, '') // Remove numeração "1. ", "2. "
+            .replace(/&amp;/gi, '&')
+            .replace(/&#039;|&apos;/gi, "'")
+            .replace(/&quot;/gi, '"')
             .replace(/[\u2018\u2019']/g, "'") // Padroniza apóstrofos
             .replace(/[\u201C\u201D"]/g, '"') // Padroniza aspas
+            .replace(/\s+/g, ' ') // Converte espaços múltiplos e quebras de linha em espaço único
             .trim()
             .toLowerCase();
     }
 
-    // Carrega dados salvos
+    // Carrega dados salvos (com fallback entre GM_getValue e localStorage para máxima resiliência)
     function loadStorage() {
         try {
-            const raw = localStorage.getItem(STORAGE_KEY);
+            let raw = null;
+            if (typeof GM_getValue !== 'undefined') {
+                raw = GM_getValue(STORAGE_KEY, null);
+            }
+            if (!raw) {
+                raw = localStorage.getItem(STORAGE_KEY);
+            }
             if (!raw) return { pets: {}, activePet: null };
             return JSON.parse(raw);
         } catch (e) {
-            console.error('[Scriptnautas] Erro ao carregar localStorage:', e);
+            console.error('[Scriptnautas] Erro ao carregar dados:', e);
             return { pets: {}, activePet: null };
         }
     }
 
-    // Salva dados no localStorage
+    // Salva dados tanto no GM_setValue (cross-protocol HTTP/HTTPS) quanto no localStorage
     function saveStorage(data) {
         try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+            const raw = JSON.stringify(data);
+            if (typeof GM_setValue !== 'undefined') {
+                GM_setValue(STORAGE_KEY, raw);
+            }
+            try {
+                localStorage.setItem(STORAGE_KEY, raw);
+            } catch (ignore) {}
         } catch (e) {
-            console.error('[Scriptnautas] Erro ao salvar no localStorage:', e);
+            console.error('[Scriptnautas] Erro ao salvar dados:', e);
         }
+    }
+
+    // Detecta o Pet Ativo na página atual (seja pelo dropdown de navegação 2020 ou clássico)
+    function detectPageActivePet() {
+        const petLink = document.querySelector('.nav-profile-dropdown-text a[href*="petlookup.phtml"], a[href*="quickref.phtml"]');
+        if (petLink && petLink.textContent) {
+            return petLink.textContent.trim();
+        }
+        const petImg = document.querySelector('.nav-pet-menu-icon__2020, #navProfilePet__2020');
+        if (petImg && petImg.getAttribute('data-petname')) {
+            return petImg.getAttribute('data-petname').trim();
+        }
+        return null;
+    }
+
+    // Resolução inteligente do Pet Ativo e seus dados salvos
+    function resolvePetData(storage) {
+        if (!storage || !storage.pets) return { petName: null, petData: null };
+
+        const pagePet = detectPageActivePet();
+        const candidateNames = [];
+        if (pagePet) candidateNames.push(pagePet);
+        if (storage.activePet) candidateNames.push(storage.activePet);
+
+        const petKeys = Object.keys(storage.pets);
+
+        // 1. Tenta correspondência exata ou case-insensitive
+        for (const candidate of candidateNames) {
+            if (storage.pets[candidate]) {
+                return { petName: candidate, petData: storage.pets[candidate] };
+            }
+            const match = petKeys.find(k => k.toLowerCase() === candidate.toLowerCase());
+            if (match) {
+                return { petName: match, petData: storage.pets[match] };
+            }
+        }
+
+        // 2. Se houver exatamente 1 pet cadastrado no banco, utiliza ele
+        if (petKeys.length === 1) {
+            const singlePet = petKeys[0];
+            return { petName: singlePet, petData: storage.pets[singlePet] };
+        }
+
+        return { petName: candidateNames[0] || null, petData: null };
     }
 
     // Retorna a URL atual e parâmetros
@@ -191,7 +253,9 @@
             let petName = searchParams.get('pet_name') || '';
             const isBooktastic = searchParams.get('tab') === 'booktastic' || currentUrl.href.includes('tab=booktastic');
             const tabKey = isBooktastic ? 'booktastic' : 'regular';
+            const tabIdsKey = isBooktastic ? 'booktasticIds' : 'regularIds';
             const bookTitles = new Set();
+            const bookIds = new Set();
 
             // 1.1 Tentativa Principal: Variável global injetada pelo Neopets moderno
             const pageConfig = pageWindow.__booksReadConfig || window.__booksReadConfig;
@@ -201,7 +265,10 @@
                 }
                 if (Array.isArray(pageConfig.books)) {
                     pageConfig.books.forEach(b => {
-                        if (b && b.name) bookTitles.add(b.name.trim());
+                        if (b) {
+                            if (b.name) bookTitles.add(b.name.trim());
+                            if (b.objInfoId) bookIds.add(String(b.objInfoId));
+                        }
                     });
                 }
             }
@@ -231,7 +298,10 @@
                                     if (parsed.currentPet && !petName) petName = parsed.currentPet;
                                     if (Array.isArray(parsed.books)) {
                                         parsed.books.forEach(b => {
-                                            if (b && b.name) bookTitles.add(b.name.trim());
+                                            if (b) {
+                                                if (b.name) bookTitles.add(b.name.trim());
+                                                if (b.objInfoId) bookIds.add(String(b.objInfoId));
+                                            }
                                         });
                                     }
                                 } catch (e) {
@@ -265,14 +335,16 @@
 
             if (!petName) petName = 'Neopet';
 
-            // Salva dados no LocalStorage
+            // Salva dados no Storage
             const storage = loadStorage();
             if (!storage.pets[petName]) {
-                storage.pets[petName] = { regular: [], booktastic: [], lastUpdated: 0 };
+                storage.pets[petName] = { regular: [], regularIds: [], booktastic: [], booktasticIds: [], lastUpdated: 0 };
             }
 
             const currentList = Array.from(bookTitles);
+            const currentIds = Array.from(bookIds);
             storage.pets[petName][tabKey] = currentList;
+            storage.pets[petName][tabIdsKey] = currentIds;
             storage.pets[petName].lastUpdated = Date.now();
             storage.activePet = petName;
             saveStorage(storage);
@@ -373,7 +445,7 @@
     // =========================================================================
     // 2. LOJAS OFICIAIS DE LIVROS (objects.phtml?type=shop&obj_type=...)
     // =========================================================================
-    else if (pathname.includes('objects.phtml') && searchParams.get('type') === 'shop') {
+    else if (pathname.includes('objects.phtml') && (searchParams.get('type') === 'shop' || searchParams.has('obj_type'))) {
         const objType = parseInt(searchParams.get('obj_type'), 10);
 
         // Somente executa se for uma das lojas oficiais de livros homologadas
@@ -381,17 +453,26 @@
             injectStyles();
 
             const storage = loadStorage();
-            const activePet = storage.activePet;
-            const petData = activePet && storage.pets[activePet] ? storage.pets[activePet] : null;
+            const { petName: activePet, petData } = resolvePetData(storage);
 
-            // Une os livros normais e booktastic em um conjunto normalizado
+            // Conjuntos normalizados de IDs e Títulos
             const readBooksSet = new Set();
+            const readIdsSet = new Set();
+
             if (petData) {
                 (petData.regular || []).forEach(b => readBooksSet.add(normalizeTitle(b)));
                 (petData.booktastic || []).forEach(b => readBooksSet.add(normalizeTitle(b)));
+                (petData.regularIds || []).forEach(id => readIdsSet.add(String(id)));
+                (petData.booktasticIds || []).forEach(id => readIdsSet.add(String(id)));
             }
 
+            const hasSavedData = (readBooksSet.size > 0 || readIdsSet.size > 0);
+
             function processOfficialShopItems() {
+                // TRAVA DE SEGURANÇA: Se não há nenhum livro salvo no banco para o pet,
+                // NÃO destaca nada como "NÃO LIDO" para evitar falsos positivos
+                if (!hasSavedData) return;
+
                 // Layout moderno do Neopets (.shop-item)
                 const modernItems = document.querySelectorAll('.shop-item:not([data-sn-checked])');
                 modernItems.forEach(item => {
@@ -401,7 +482,11 @@
                     const itemName = img?.getAttribute('data-name') || nameEl?.textContent || '';
                     if (!itemName) return;
 
-                    const isRead = readBooksSet.has(normalizeTitle(itemName));
+                    const dataLink = img?.getAttribute('data-link') || item.querySelector('a')?.getAttribute('href') || '';
+                    const idMatch = dataLink.match(/obj_info_id=(\d+)/);
+                    const itemId = idMatch ? idMatch[1] : null;
+
+                    const isRead = (itemId && readIdsSet.has(itemId)) || readBooksSet.has(normalizeTitle(itemName));
 
                     if (isRead) {
                         item.classList.add('sn-item-read');
@@ -418,7 +503,7 @@
                     }
                 });
 
-                // Layout clássico (tabela de itens)
+                // Layout clássico (tabela de itens com links para haggle.phtml)
                 const legacyLinks = document.querySelectorAll('a[href*="haggle.phtml"]:not([data-sn-checked])');
                 legacyLinks.forEach(link => {
                     link.setAttribute('data-sn-checked', 'true');
@@ -429,7 +514,11 @@
                     const itemName = nameEl ? nameEl.textContent : '';
                     if (!itemName) return;
 
-                    const isRead = readBooksSet.has(normalizeTitle(itemName));
+                    const linkHref = link.getAttribute('href') || '';
+                    const idMatch = linkHref.match(/obj_info_id=(\d+)/);
+                    const itemId = idMatch ? idMatch[1] : null;
+
+                    const isRead = (itemId && readIdsSet.has(itemId)) || readBooksSet.has(normalizeTitle(itemName));
                     if (isRead) {
                         cell.classList.add('sn-item-read');
                     } else {
@@ -439,6 +528,13 @@
             }
 
             processOfficialShopItems();
+
+            // Observador de mutações para suportar restock dinâmico ou paginação na loja
+            const shopContainer = document.querySelector('.shop-grid, #container__2020') || document.body;
+            const observer = new MutationObserver(() => {
+                processOfficialShopItems();
+            });
+            observer.observe(shopContainer, { childList: true, subtree: true });
 
             // Badge flutuante de status
             renderFloatingBadge(activePet, petData, OFFICIAL_BOOK_SHOPS[objType]);
@@ -452,13 +548,16 @@
         injectStyles();
 
         const storage = loadStorage();
-        const activePet = storage.activePet;
-        const petData = activePet && storage.pets[activePet] ? storage.pets[activePet] : null;
+        const { petName: activePet, petData } = resolvePetData(storage);
 
         const readBooksSet = new Set();
+        const readIdsSet = new Set();
+
         if (petData) {
             (petData.regular || []).forEach(b => readBooksSet.add(normalizeTitle(b)));
             (petData.booktastic || []).forEach(b => readBooksSet.add(normalizeTitle(b)));
+            (petData.regularIds || []).forEach(id => readIdsSet.add(String(id)));
+            (petData.booktasticIds || []).forEach(id => readIdsSet.add(String(id)));
         }
 
         function processUserShopItems() {
@@ -471,9 +570,13 @@
                 const itemName = btn?.getAttribute('data-name') || nameSpan?.textContent || '';
                 if (!itemName) return;
 
+                const oii = item.getAttribute('data-oii') || (btn?.getAttribute('data-buy-url') || '').match(/obj_info_id=(\d+)/)?.[1];
+
                 // REGRA ESTREITA: Apenas se o item for CONFIRMADO como já lido nós apagamos.
                 // Itens não lidos permanecem inalterados pois podem ser brinquedos, comida, etc.
-                if (readBooksSet.has(normalizeTitle(itemName))) {
+                const isRead = (oii && readIdsSet.has(oii)) || readBooksSet.has(normalizeTitle(itemName));
+
+                if (isRead) {
                     item.classList.add('sn-item-read');
                     const badge = document.createElement('span');
                     badge.className = 'sn-badge-read';
@@ -493,7 +596,12 @@
                 const itemName = nameEl ? nameEl.textContent : '';
                 if (!itemName) return;
 
-                if (readBooksSet.has(normalizeTitle(itemName))) {
+                const linkHref = link.getAttribute('href') || '';
+                const idMatch = linkHref.match(/buy_obj_info_id=(\d+)/);
+                const itemId = idMatch ? idMatch[1] : null;
+
+                const isRead = (itemId && readIdsSet.has(itemId)) || readBooksSet.has(normalizeTitle(itemName));
+                if (isRead) {
                     cell.classList.add('sn-item-read');
                 }
             });
@@ -522,19 +630,20 @@
         badge.id = 'scriptnautas-status-badge';
         badge.className = 'sn-status-floating';
 
-        if (!petName || !petData) {
+        const regCount = (petData && petData.regular) ? petData.regular.length : 0;
+        const bookCount = (petData && petData.booktastic) ? petData.booktastic.length : 0;
+        const total = regCount + bookCount;
+
+        if (!petName || total === 0) {
             badge.innerHTML = `
-                <span>⚠️ <strong>Scriptnautas:</strong> Nenhum pet sincronizado.</span>
-                <a href="/books_read.phtml" target="_blank">Abrir Lista de Livros</a>
+                <span>⚠️ <strong>Scriptnautas:</strong> Nenhum livro sincronizado${petName ? ` para ${petName}` : ''}.</span>
+                <a href="/books_read.phtml${petName ? `?pet_name=${encodeURIComponent(petName)}` : ''}" target="_blank">Sincronizar Livros</a>
             `;
         } else {
-            const regCount = (petData.regular || []).length;
-            const bookCount = (petData.booktastic || []).length;
-            const total = regCount + bookCount;
             badge.innerHTML = `
                 <span>📖 <strong>${petName}</strong>: ${total} livros lidos (${regCount} normais, ${bookCount} booktastic)</span>
                 <span style="color: #9ca3af;">•</span>
-                <a href="/books_read.phtml?pet_name=${encodeURIComponent(petName)}" title="Atualizar lista de livros">Sincronizar</a>
+                <a href="/books_read.phtml?pet_name=${encodeURIComponent(petName)}" title="Atualizar lista de livros">Atualizar</a>
             `;
         }
 

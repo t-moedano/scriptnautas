@@ -1,4 +1,4 @@
-﻿# 🚀 Scriptnautas
+# 🚀 Scriptnautas
 > *Userscripts focados em qualidade de vida, automação e facilidades para a web!*
 
 Bem-vindo ao **Scriptnautas**! Este repositório reúne userscripts desenvolvidos para rodar via [Tampermonkey](https://www.tampermonkey.net/) (ou Violentmonkey / Greasemonkey), trazendo melhorias visuais e de navegação para jogos e sites.
@@ -9,7 +9,7 @@ Bem-vindo ao **Scriptnautas**! Este repositório reúne userscripts desenvolvido
 
 | Script | Categoria | Versão | Instalação 1-Clique | Descrição |
 | :--- | :--- | :---: | :---: | :--- |
-| **Neopets: Book Tracker & Shop Marker** | Neopets | `1.0.0` | [📥 Instalar](https://raw.githubusercontent.com/t-moedano/scriptnautas/main/scripts/neopets-book-tracker/neopets-book-tracker.user.js) | Destaca livros não lidos em lojas oficiais e marca livros já lidos em lojas de usuários. |
+| **Neopets: Book Tracker & Shop Marker** | Neopets | `1.0.2` | [📥 Instalar](https://raw.githubusercontent.com/t-moedano/scriptnautas/main/scripts/neopets-book-tracker/neopets-book-tracker.user.js) | Destaca livros não lidos em lojas oficiais e marca livros já lidos em lojas de usuários. |
 
 ---
 
