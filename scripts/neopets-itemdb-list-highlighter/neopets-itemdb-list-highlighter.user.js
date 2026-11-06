@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Neopets: Marcador de Lojas por Lista do itemDB (Wishlist Highlighter)
 // @namespace    https://github.com/t-moedano/scriptnautas
-// @version      1.0.2
-// @description  Destaca itens da sua lista personalizada do itemDB em qualquer loja oficial ou loja de usuário do Neopets.
+// @version      1.1.0
+// @description  Destaca itens da sua lista personalizada do itemDB em qualquer loja oficial ou loja de usuário do Neopets com cores personalizadas por faixas de preço.
 // @author       t-moedano
 // @match        *://*.neopets.com/objects.phtml?*type=shop*
 // @match        *://*.neopets.com/browseshop.phtml*
@@ -27,6 +27,14 @@
     'use strict';
 
     const STORAGE_KEY = 'neopets_itemdb_highlighter_storage_v1';
+
+    // Faixas padrão de preço (máximo 5 faixas configuráveis)
+    const DEFAULT_PRICE_TIERS = [
+        { maxPrice: 10000000, color: '#22c55e' }, // Até 10M -> Verde
+        { maxPrice: 50000000, color: '#eab308' }, // Até 50M -> Amarelo
+        { maxPrice: Infinity, color: '#ef4444' }  // Acima de 50M -> Vermelho
+    ];
+    const DEFAULT_UNPRICED_COLOR = '#8b5cf6'; // Roxo padrão para itens sem preço
 
     // =========================================================================
     // UTILITÁRIOS GERAIS
@@ -54,6 +62,68 @@
     function formatNumber(num) {
         if (!num || isNaN(num)) return '0';
         return Number(num).toLocaleString('pt-BR');
+    }
+
+    function hexToRgba(hex, alpha) {
+        if (!hex || typeof hex !== 'string') return `rgba(139, 92, 246, ${alpha})`;
+        let clean = hex.replace('#', '').trim();
+        if (clean.length === 3) {
+            clean = clean.split('').map(c => c + c).join('');
+        }
+        const num = parseInt(clean, 16);
+        if (isNaN(num)) return `rgba(139, 92, 246, ${alpha})`;
+        const r = (num >> 16) & 255;
+        const g = (num >> 8) & 255;
+        const b = num & 255;
+        return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+
+    function formatPriceCompact(num) {
+        if (num === Infinity || num === null || num === undefined) return 'Sem limite';
+        if (num >= 1000000) {
+            const m = num / 1000000;
+            return Number.isInteger(m) ? `${m}M` : `${m.toFixed(1)}M`;
+        }
+        if (num >= 1000) {
+            const k = num / 1000;
+            return Number.isInteger(k) ? `${k}k` : `${k.toFixed(1)}k`;
+        }
+        return String(num);
+    }
+
+    function parsePriceInput(val) {
+        if (val === null || val === undefined) return null;
+        val = String(val).trim().toLowerCase();
+        if (val === 'inf' || val === 'infinity' || val === 'acima' || val === '+' || val === '' || val === 'sem limite' || val === 'sem teto') return Infinity;
+        let multiplier = 1;
+        if (val.endsWith('m') || val.endsWith('kk')) {
+            multiplier = 1000000;
+            val = val.replace(/m|kk/g, '').trim();
+        } else if (val.endsWith('k')) {
+            multiplier = 1000;
+            val = val.replace(/k/g, '').trim();
+        }
+        val = val.replace(/\./g, '').replace(',', '.');
+        const num = parseFloat(val);
+        if (isNaN(num) || num < 0) return null;
+        return Math.round(num * multiplier);
+    }
+
+    function getItemTierColor(price, priceTiers, unpricedColor) {
+        if (price === null || price === undefined || isNaN(price)) {
+            return unpricedColor || DEFAULT_UNPRICED_COLOR;
+        }
+        if (!priceTiers || !priceTiers.length) {
+            return DEFAULT_UNPRICED_COLOR;
+        }
+
+        const sorted = [...priceTiers].sort((a, b) => a.maxPrice - b.maxPrice);
+        for (const tier of sorted) {
+            if (price <= tier.maxPrice) {
+                return tier.color;
+            }
+        }
+        return sorted[sorted.length - 1].color;
     }
 
     function escapeHtml(text) {
@@ -111,7 +181,9 @@
                 highlightOfficial: true,
                 highlightUserShops: true,
                 showPriceTag: true
-            }
+            },
+            priceTiers: JSON.parse(JSON.stringify(DEFAULT_PRICE_TIERS)),
+            unpricedColor: DEFAULT_UNPRICED_COLOR
         };
     }
 
@@ -128,6 +200,10 @@
 
             const parsed = JSON.parse(raw);
             if (!parsed.settings) parsed.settings = getDefaultStorage().settings;
+            parsed.priceTiers = (Array.isArray(parsed.priceTiers) && parsed.priceTiers.length > 0)
+                ? parsed.priceTiers
+                : JSON.parse(JSON.stringify(DEFAULT_PRICE_TIERS));
+            parsed.unpricedColor = parsed.unpricedColor || DEFAULT_UNPRICED_COLOR;
             return parsed;
         } catch (e) {
             console.error('[Scriptnautas itemDB] Erro ao carregar storage:', e);
@@ -297,18 +373,18 @@
         const style = document.createElement('style');
         style.id = 'scriptnautas-itemdb-styles';
         style.textContent = `
-            /* Efeito de destaque para itens da lista */
+            /* Efeito de destaque para itens da lista com variáveis de faixa de preço */
             .sn-itemdb-match {
-                outline: 3px solid #8b5cf6 !important;
-                background: rgba(139, 92, 246, 0.16) !important;
+                outline: 3px solid var(--sn-tier-color, #8b5cf6) !important;
+                background: var(--sn-tier-bg, rgba(139, 92, 246, 0.16)) !important;
                 border-radius: 8px !important;
-                box-shadow: 0 0 16px rgba(139, 92, 246, 0.55) !important;
+                box-shadow: 0 0 16px var(--sn-tier-shadow, rgba(139, 92, 246, 0.55)) !important;
                 position: relative !important;
                 transition: transform 0.15s ease, box-shadow 0.15s ease !important;
             }
             .sn-itemdb-match:hover {
                 transform: translateY(-2px);
-                box-shadow: 0 0 20px rgba(139, 92, 246, 0.8) !important;
+                box-shadow: 0 0 20px var(--sn-tier-shadow, rgba(139, 92, 246, 0.8)) !important;
             }
 
             /* Badge sobre o item */
@@ -316,7 +392,7 @@
                 position: absolute;
                 top: 4px;
                 right: 4px;
-                background: linear-gradient(135deg, #7c3aed, #9333ea);
+                background: var(--sn-tier-color, #7c3aed);
                 color: #ffffff;
                 font-family: system-ui, -apple-system, sans-serif;
                 font-weight: 800;
@@ -719,12 +795,17 @@
 
         const storage = loadStorage();
         const activeList = storage.activeList;
+        let tiers = JSON.parse(JSON.stringify(storage.priceTiers || DEFAULT_PRICE_TIERS));
+        let unpricedColor = storage.unpricedColor || DEFAULT_UNPRICED_COLOR;
 
         const overlay = document.createElement('div');
         overlay.className = 'sn-itemdb-modal-overlay';
 
         const modal = document.createElement('div');
         modal.className = 'sn-itemdb-modal';
+        modal.style.maxWidth = '560px';
+        modal.style.maxHeight = '90vh';
+        modal.style.overflowY = 'auto';
 
         let activeCardHtml = `
             <div style="background: #0f172a; border-radius: 8px; padding: 12px; margin-bottom: 16px; color: #94a3b8; font-size: 12px; text-align: center;">
@@ -773,6 +854,7 @@
                 </button>
             </div>
 
+            <!-- Opções de Visibilidade -->
             <div style="border-top: 1px solid #334155; padding-top: 12px; margin-top: 12px;">
                 <label class="sn-itemdb-checkbox-label">
                     <input type="checkbox" id="sn-check-official" ${storage.settings.highlightOfficial ? 'checked' : ''} />
@@ -787,16 +869,177 @@
                     Exibir estimativa de preço do itemDB sob os itens destacados
                 </label>
             </div>
+
+            <!-- Faixas de Preço e Cores (Tiers) -->
+            <div style="border-top: 1px solid #334155; padding-top: 14px; margin-top: 14px;">
+                <div style="margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px;">
+                    <div>
+                        <div style="font-weight: 700; font-size: 13px; color: #f3f4f6;">Faixas de Preço e Cores de Destaque</div>
+                        <div style="font-size: 11px; color: #94a3b8;">Até 5 faixas personalizadas por valor em NP (ex: 10M, 50m, 500k ou + para sem limite):</div>
+                    </div>
+                    <button id="sn-btn-add-tier" class="sn-itemdb-btn-primary" style="font-size: 11px; padding: 5px 12px; ${tiers.length >= 5 ? 'display: none;' : ''}">
+                        ➕ Nova Faixa (${tiers.length}/5)
+                    </button>
+                </div>
+
+                <!-- Lista de Faixas -->
+                <div id="sn-tiers-container" style="display: flex; flex-direction: column; gap: 8px; max-height: 200px; overflow-y: auto; margin-bottom: 12px; padding-right: 4px;">
+                </div>
+
+                <!-- Item sem preço -->
+                <div style="background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 10px 12px; margin-bottom: 14px; display: flex; align-items: center; justify-content: space-between;">
+                    <div>
+                        <div style="font-size: 12px; font-weight: 600; color: #e2e8f0;">Item sem cotação recente no itemDB:</div>
+                        <div style="font-size: 11px; color: #94a3b8;">Cor de destaque quando o item não possui preço registrado</div>
+                    </div>
+                    <input type="color" id="sn-unpriced-color-input" value="${unpricedColor}" style="width: 36px; height: 30px; border: none; border-radius: 6px; cursor: pointer; background: transparent;" title="Escolher cor para itens sem cotação">
+                </div>
+
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px; flex-wrap: wrap; gap: 8px;">
+                    <button id="sn-btn-restore-tiers" style="background: transparent; border: 1px solid #475569; color: #94a3b8; font-size: 11px; padding: 6px 12px; border-radius: 6px; cursor: pointer;">
+                        Restaurar Cores Padrão
+                    </button>
+                    <button id="sn-btn-save-settings" class="sn-itemdb-btn-primary" style="font-size: 12px; padding: 7px 16px;">
+                        💾 Salvar Alterações
+                    </button>
+                </div>
+            </div>
         `;
 
         overlay.appendChild(modal);
         document.body.appendChild(overlay);
 
-        // Ações dos botões
+        const container = modal.querySelector('#sn-tiers-container');
+
+        function renderTiersRows() {
+            container.innerHTML = '';
+            tiers.forEach((tier, index) => {
+                const row = document.createElement('div');
+                row.className = 'sn-tier-row';
+                row.style.cssText = 'display: flex; align-items: center; gap: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 8px 10px;';
+
+                const displayVal = tier.maxPrice === Infinity ? '+' : formatPriceCompact(tier.maxPrice);
+                const formattedHint = tier.maxPrice === Infinity ? 'Sem teto (acima de tudo)' : `${formatNumber(tier.maxPrice)} NP`;
+
+                row.innerHTML = `
+                    <input type="color" class="sn-tier-color" value="${tier.color}" style="width: 34px; height: 30px; border: none; border-radius: 6px; cursor: pointer; background: transparent;" title="Escolher cor da faixa">
+                    <div style="flex: 1; display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                        <span style="font-size: 12px; color: #94a3b8; white-space: nowrap;">Até:</span>
+                        <input type="text" class="sn-tier-price" value="${displayVal}" placeholder="ex: 10M ou +" style="width: 100px; background: #1e293b; border: 1px solid #475569; color: #f8fafc; border-radius: 6px; padding: 4px 8px; font-size: 12px; font-family: monospace;">
+                        <span class="sn-tier-hint" style="font-size: 11px; color: #a855f7;">${formattedHint}</span>
+                    </div>
+                    ${tiers.length > 1 ? `<button class="sn-tier-del-btn" style="background: transparent; border: none; color: #f87171; cursor: pointer; font-size: 16px; padding: 2px 6px; line-height: 1;" title="Remover esta faixa">&times;</button>` : ''}
+                `;
+
+                const colorInput = row.querySelector('.sn-tier-color');
+                const priceInput = row.querySelector('.sn-tier-price');
+                const hintSpan = row.querySelector('.sn-tier-hint');
+                const delBtn = row.querySelector('.sn-tier-del-btn');
+
+                colorInput.addEventListener('input', (e) => {
+                    tier.color = e.target.value;
+                });
+
+                priceInput.addEventListener('input', (e) => {
+                    const parsed = parsePriceInput(e.target.value);
+                    if (parsed === null) {
+                        hintSpan.textContent = 'Inválido';
+                        hintSpan.style.color = '#f87171';
+                    } else if (parsed === Infinity) {
+                        tier.maxPrice = Infinity;
+                        hintSpan.textContent = 'Sem teto (acima de tudo)';
+                        hintSpan.style.color = '#a78bfa';
+                    } else {
+                        tier.maxPrice = parsed;
+                        hintSpan.textContent = `${formatNumber(parsed)} NP`;
+                        hintSpan.style.color = '#38bdf8';
+                    }
+                });
+
+                if (delBtn) {
+                    delBtn.addEventListener('click', () => {
+                        tiers.splice(index, 1);
+                        renderTiersRows();
+                        updateAddButton();
+                    });
+                }
+
+                container.appendChild(row);
+            });
+        }
+
+        function updateAddButton() {
+            const addBtn = modal.querySelector('#sn-btn-add-tier');
+            if (addBtn) {
+                addBtn.textContent = `➕ Nova Faixa (${tiers.length}/5)`;
+                addBtn.style.display = tiers.length >= 5 ? 'none' : 'inline-block';
+            }
+        }
+
+        renderTiersRows();
+
+        // Botão Adicionar Faixa
+        modal.querySelector('#sn-btn-add-tier')?.addEventListener('click', () => {
+            if (tiers.length >= 5) return;
+            let newMax = 100000000;
+            let newColor = '#f97316';
+            if (tiers.length > 0) {
+                const prevMax = tiers[tiers.length - 1].maxPrice;
+                if (prevMax !== Infinity) {
+                    newMax = prevMax * 2;
+                }
+            }
+            tiers.push({ maxPrice: newMax, color: newColor });
+            renderTiersRows();
+            updateAddButton();
+        });
+
+        // Restaurar Padrões
+        modal.querySelector('#sn-btn-restore-tiers')?.addEventListener('click', () => {
+            tiers = JSON.parse(JSON.stringify(DEFAULT_PRICE_TIERS));
+            unpricedColor = DEFAULT_UNPRICED_COLOR;
+            const unpricedInput = modal.querySelector('#sn-unpriced-color-input');
+            if (unpricedInput) unpricedInput.value = unpricedColor;
+            renderTiersRows();
+            updateAddButton();
+        });
+
+        function saveAllConfigAndRefresh() {
+            const st = loadStorage();
+            const checkOfficial = modal.querySelector('#sn-check-official');
+            const checkUser = modal.querySelector('#sn-check-user');
+            const checkPrices = modal.querySelector('#sn-check-prices');
+            const unpricedInput = modal.querySelector('#sn-unpriced-color-input');
+
+            if (checkOfficial) st.settings.highlightOfficial = checkOfficial.checked;
+            if (checkUser) st.settings.highlightUserShops = checkUser.checked;
+            if (checkPrices) st.settings.showPriceTag = checkPrices.checked;
+            if (unpricedInput) unpricedColor = unpricedInput.value;
+
+            tiers.sort((a, b) => a.maxPrice - b.maxPrice);
+            st.priceTiers = tiers;
+            st.unpricedColor = unpricedColor;
+            saveStorage(st);
+            reapplyShopHighlights();
+        }
+
+        modal.querySelector('#sn-btn-save-settings')?.addEventListener('click', () => {
+            saveAllConfigAndRefresh();
+            overlay.remove();
+            showToast('Configurações salvas!');
+        });
+
+        // Ações de Fechar
         const closeBtn = modal.querySelector('#sn-itemdb-close');
-        closeBtn.onclick = () => overlay.remove();
+        closeBtn.onclick = () => {
+            saveAllConfigAndRefresh();
+            overlay.remove();
+        };
         overlay.onclick = (e) => {
-            if (e.target === overlay) overlay.remove();
+            if (e.target === overlay) {
+                saveAllConfigAndRefresh();
+                overlay.remove();
+            }
         };
 
         const syncBtn = modal.querySelector('#sn-btn-sync');
@@ -815,10 +1058,11 @@
 
             fetchListFromItemdb(parsed.username, parsed.slug)
                 .then(newList => {
+                    saveAllConfigAndRefresh();
                     overlay.remove();
                     showToast(`✅ Lista "${newList.name}" sincronizada com ${newList.itemCount} itens!`);
                     updateFloatingWidget();
-                    processShopItems();
+                    reapplyShopHighlights();
                 })
                 .catch(err => {
                     syncBtn.disabled = false;
@@ -841,24 +1085,6 @@
                 }
             };
         }
-
-        // Checkboxes de opções
-        const checkOfficial = modal.querySelector('#sn-check-official');
-        const checkUser = modal.querySelector('#sn-check-user');
-        const checkPrices = modal.querySelector('#sn-check-prices');
-
-        const saveSettings = () => {
-            const st = loadStorage();
-            st.settings.highlightOfficial = checkOfficial.checked;
-            st.settings.highlightUserShops = checkUser.checked;
-            st.settings.showPriceTag = checkPrices.checked;
-            saveStorage(st);
-            processShopItems();
-        };
-
-        checkOfficial.onchange = saveSettings;
-        checkUser.onchange = saveSettings;
-        checkPrices.onchange = saveSettings;
     }
 
     // =========================================================================
@@ -950,6 +1176,15 @@
         return null;
     }
 
+    function reapplyShopHighlights() {
+        document.querySelectorAll('[data-sn-itemdb-checked]').forEach(el => {
+            el.removeAttribute('data-sn-itemdb-checked');
+            el.classList.remove('sn-itemdb-match');
+            el.querySelectorAll('.sn-itemdb-badge, .sn-itemdb-price-tag').forEach(b => b.remove());
+        });
+        processShopItems();
+    }
+
     function processShopItems() {
         const isOfficialShop = window.location.pathname.includes('objects.phtml');
         const isUserShop = window.location.pathname.includes('browseshop.phtml');
@@ -957,6 +1192,8 @@
         const storage = loadStorage();
         const settings = storage.settings;
         const activeList = storage.activeList;
+        const priceTiers = storage.priceTiers || DEFAULT_PRICE_TIERS;
+        const unpricedColor = storage.unpricedColor || DEFAULT_UNPRICED_COLOR;
 
         if (!activeList || !activeList.itemCount) return;
         if (isOfficialShop && !settings.highlightOfficial) return;
@@ -974,7 +1211,7 @@
 
                 const matched = matchItemInList(itemName, itemSrc, activeList);
                 if (matched) {
-                    applyItemHighlight(item, matched, settings.showPriceTag);
+                    applyItemHighlight(item, matched, settings.showPriceTag, priceTiers, unpricedColor);
                 }
             });
 
@@ -992,7 +1229,7 @@
 
                 const matched = matchItemInList(itemName, itemSrc, activeList);
                 if (matched) {
-                    applyItemHighlight(cell, matched, settings.showPriceTag);
+                    applyItemHighlight(cell, matched, settings.showPriceTag, priceTiers, unpricedColor);
                 }
             });
         }
@@ -1010,7 +1247,7 @@
 
                 const matched = matchItemInList(itemName, itemSrc, activeList);
                 if (matched) {
-                    applyItemHighlight(item, matched, settings.showPriceTag);
+                    applyItemHighlight(item, matched, settings.showPriceTag, priceTiers, unpricedColor);
                 }
             });
 
@@ -1027,31 +1264,40 @@
 
                 const matched = matchItemInList(itemName, itemSrc, activeList);
                 if (matched) {
-                    applyItemHighlight(cell, matched, settings.showPriceTag);
+                    applyItemHighlight(cell, matched, settings.showPriceTag, priceTiers, unpricedColor);
                 }
             });
         }
     }
 
-    function applyItemHighlight(container, itemData, showPriceTag) {
+    function applyItemHighlight(container, itemData, showPriceTag, priceTiers, unpricedColor) {
+        const itemPrice = (itemData && typeof itemData.price === 'number') ? itemData.price : null;
+        const tierColor = getItemTierColor(itemPrice, priceTiers, unpricedColor);
+        const bgRgba = hexToRgba(tierColor, 0.16);
+        const shadowRgba = hexToRgba(tierColor, 0.55);
+
         container.classList.add('sn-itemdb-match');
+        container.style.setProperty('--sn-tier-color', tierColor);
+        container.style.setProperty('--sn-tier-bg', bgRgba);
+        container.style.setProperty('--sn-tier-shadow', shadowRgba);
 
         // Evitar duplicar badges
         if (container.querySelector('.sn-itemdb-badge')) return;
 
         const badge = document.createElement('span');
         badge.className = 'sn-itemdb-badge';
+        badge.style.setProperty('background', tierColor, 'important');
         badge.innerHTML = '★ ITEMDB';
         container.appendChild(badge);
 
-        if (showPriceTag && itemData.price) {
+        if (showPriceTag && itemPrice) {
             const priceTag = document.createElement('span');
             priceTag.className = 'sn-itemdb-price-tag';
-            priceTag.textContent = `💰 ~${formatNumber(itemData.price)} NP`;
+            priceTag.textContent = `💰 ~${formatNumber(itemPrice)} NP`;
             container.appendChild(priceTag);
         }
 
-        container.title = `[Lista itemDB] ${itemData.name}${itemData.rarity ? ` (r${itemData.rarity})` : ''}${itemData.price ? ` - Est: ~${formatNumber(itemData.price)} NP` : ''}`;
+        container.title = `[Lista itemDB] ${itemData.name}${itemData.rarity ? ` (r${itemData.rarity})` : ''}${itemPrice ? ` - Est: ~${formatNumber(itemPrice)} NP` : ''}`;
     }
 
     // =========================================================================

@@ -10,15 +10,19 @@ Script para Tampermonkey que conecta suas listas personalizadas do **[itemDB](ht
 
 1. **Destaque em Qualquer Loja Oficial ou de Jogador**:
    - Funciona em mais de 100 lojas oficiais (`objects.phtml`) e em todas as lojas de usuários (`browseshop.phtml`).
-   - Se o item à venda estiver na sua lista do itemDB, ele recebe uma borda vibrante na cor ametista (`#8b5cf6`), efeito de brilho e a tag `★ ITEMDB`.
-2. **Estimativa de Preço Integrada**:
+   - Se o item à venda estiver na sua lista do itemDB, ele recebe destaque com borda vibrante, efeito de brilho e a tag `★ ITEMDB`.
+2. **Cores Dinâmicas por Faixa de Preço (Tiers)**:
+   - Configure até **5 faixas de preço** com cores personalizadas (ex: até 10M 🟢 Verde, 10M-50M 🟡 Amarelo, acima de 50M 🔴 Vermelho, sem cotação 🟣 Roxo).
+   - Suporte a digitação rápida de valores: `10M`, `50m`, `500k` ou `+` para sem limite.
+   - Itens da lista recebem a cor exata da sua faixa de preço de mercado em tempo real!
+3. **Estimativa de Preço Integrada**:
    - Exibe sob o item o preço estimado atualizado de mercado registrado no itemDB (ex: `💰 ~125.000 NP`).
-3. **Dupla Experiência de Configuração**:
+4. **Dupla Experiência de Configuração**:
    - **Atalho 1-Clique no itemDB**: Ao visitar qualquer lista sua ou de outro usuário no `itemdb.com.br`, um botão `⭐ Destacar esta lista nas Lojas do Neopets` aparece no cabeçalho. Um clique e a lista já está ativa!
-   - **Widget Flutuante no Neopets**: Em qualquer loja do Neopets, um widget discreto no canto inferior direito permite abrir o painel, colar uma URL, verificar o número de itens ou forçar a atualização.
-4. **Desempenho Instantâneo (0ms de atraso)**:
+   - **Widget Flutuante no Neopets**: Em qualquer loja do Neopets, um widget discreto no canto inferior direito permite abrir o painel, colar uma URL, configurar faixas de cores, verificar o número de itens ou forçar a atualização.
+5. **Desempenho Instantâneo (0ms de atraso)**:
    - Os dados são baixados uma única vez e armazenados localmente (`Cache-First`). Ao navegar pelas lojas de restock, a verificação é instantânea na memória do navegador.
-5. **Compatível com Ambientes Moderno e Clássico**:
+6. **Compatível com Ambientes Moderno e Clássico**:
    - Suporte completo às interfaces modernas (`.shop-item`, `.bsp-item`) e clássicas (`haggle.phtml`, tabelas antigas) do Neopets.
 
 ---
@@ -51,6 +55,8 @@ Você pode ativar sua lista de duas maneiras super simples:
 ## ⚙️ Opções Personalizáveis
 
 No painel de configurações (clicando no widget no Neopets), você pode:
+* Configurar até **5 faixas de preço personalizadas** e escolher as cores de destaque de cada uma.
+* Escolher a cor de destaque para itens sem cotação de mercado.
 * Alternar destaque em Lojas Oficiais (`objects.phtml`).
 * Alternar destaque em Lojas de Usuários (`browseshop.phtml`).
 * Ativar ou ocultar as tags com estimativa de preço em NP.
