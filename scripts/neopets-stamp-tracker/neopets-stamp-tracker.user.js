@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Neopets: Rastreador de Selos & Marcador de Lojas
 // @namespace    https://github.com/t-moedano/scriptnautas
-// @version      1.0.1
+// @version      1.0.2
 // @description  Rastreia selos, moedas e conchas colecionados no seu Álbum de Selos do Neopets e destaca itens faltantes em lojas oficiais (Post Office, Coin Shop, Sea Shells) e lojas de usuários.
 // @author       t-moedano
 // @match        *://*.neopets.com/stamps.phtml*
@@ -37,11 +37,6 @@
     const ALBUM_ITEM_KEYWORDS = [
         'stamp', 'coin', 'coins', 'shell', 'scarab', 'coconut', 'charm', 'golden dubloon'
     ];
-
-    // Mapeamento de fallback para itens novos conhecidos cujo alt/title venha vazio da TNT
-    const KNOWN_HASH_FALLBACKS = {
-        'ba70c82b0047e6': 'Library Faerie Coin'
-    };
 
     // =========================================================================
     // UTILITÁRIOS
@@ -112,16 +107,18 @@
                     totalCount: 0,
                     uniqueCount: 0,
                     pages: {},
+                    pageCounts: {},
                     stamps: {},
                     stampImages: {}
                 };
             }
             const data = JSON.parse(raw);
             data.stampImages = data.stampImages || {};
+            data.pageCounts = data.pageCounts || {};
             return data;
         } catch (e) {
             console.error('[Scriptnautas Selos] Erro ao carregar storage:', e);
-            return { username: null, lastSync: null, totalCount: 0, uniqueCount: 0, pages: {}, stamps: {}, stampImages: {} };
+            return { username: null, lastSync: null, totalCount: 0, uniqueCount: 0, pages: {}, pageCounts: {}, stamps: {}, stampImages: {} };
         }
     }
 
@@ -180,11 +177,8 @@
         }
         if (itemSrc) {
             const hash = extractItemHash(itemSrc);
-            if (hash && (imageSet[hash] || KNOWN_HASH_FALLBACKS[hash])) {
-                const fallbackName = KNOWN_HASH_FALLBACKS[hash];
-                if (imageSet[hash] || (fallbackName && collectedSet.has(normalizeTitle(fallbackName)))) {
-                    return true;
-                }
+            if (hash && imageSet[hash]) {
+                return true;
             }
         }
         return false;
@@ -297,7 +291,7 @@
                 border-radius: 16px;
                 padding: 24px;
                 width: 90%;
-                max-width: 480px;
+                max-width: 520px;
                 box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
                 text-align: center;
             }
@@ -328,6 +322,19 @@
             .sn-btn-primary:hover {
                 background: #10b981;
             }
+            .sn-log-container {
+                max-height: 160px;
+                overflow-y: auto;
+                background: #111827;
+                border: 1px solid #374151;
+                border-radius: 8px;
+                padding: 8px 12px;
+                font-family: monospace;
+                font-size: 11px;
+                text-align: left;
+                margin-top: 12px;
+                color: #d1d5db;
+            }
         `;
         document.head.appendChild(style);
     }
@@ -346,36 +353,37 @@
         const requestedOwner = searchParams.get('owner');
         const isMyAlbum = !requestedOwner || (currentUser && requestedOwner.toLowerCase() === currentUser);
 
-        // Extrai selos colados de um Document ou Container
+        // Extrai com precisão cirúrgica os 25 slots da grade do álbum
         function extractStampsFromDoc(rootDoc) {
             const stamps = [];
 
-            // As células dos selos têm width="90" ou estão na tabela central de 450px
-            const cells = rootDoc.querySelectorAll('table[width="450"] td, .content table td[width="90"], table[width="450"] img, .content table img');
+            // A grade do álbum do Neopets é uma tabela 5x5 com width="450" (ou altura 450)
+            const albumTable = rootDoc.querySelector('table[width="450"]') ||
+                               rootDoc.querySelector('table[height="450"]') ||
+                               rootDoc.querySelector('.content table:has(img[src*="stamp_"], img[src*="no_stamp"], img[src*="items/"])');
 
-            cells.forEach(el => {
-                const img = el.tagName === 'IMG' ? el : el.querySelector('img');
+            // Células da grade de selos
+            const cells = albumTable
+                ? albumTable.querySelectorAll('td[width="90"], td[bgcolor="white"], td[bgcolor="silver"]')
+                : rootDoc.querySelectorAll('.content table td[width="90"]');
+
+            cells.forEach(cell => {
+                const img = cell.querySelector('img');
                 if (!img) return;
 
                 const src = img.getAttribute('src') || '';
-                // Ignora slots vazios, bordas, espaçadores e setas
+                // Se for slot vazio, espaçador ou setas, ignora
                 if (!src || src.includes('no_stamp.gif') || src.includes('stamp_blank.gif') || src.includes('transparent_spacer.gif')) {
                     return;
                 }
                 if (src.includes('arrow-') || src.includes('question_mark')) return;
 
-                let name = (img.getAttribute('alt') || img.getAttribute('title') || el.getAttribute?.('title') || '').trim();
+                let name = (img.getAttribute('alt') || img.getAttribute('title') || cell.getAttribute('title') || '').trim();
                 const imgKey = extractItemHash(src);
 
-                // Se explicitamente for "No Stamp", ignora
                 if (name === 'No Stamp') return;
 
-                // Fallback para itens com hash sem nome no HTML da TNT
-                if (!name && imgKey && KNOWN_HASH_FALLBACKS[imgKey]) {
-                    name = KNOWN_HASH_FALLBACKS[imgKey];
-                }
-
-                // Se ainda assim não tiver nome, mas é um item válido no slot
+                // Se o nome vier vazio pela TNT, usa o hash da imagem
                 if (!name && imgKey) {
                     name = imgKey;
                 }
@@ -388,18 +396,15 @@
                 }
             });
 
-            // Evita duplicação caso tenhamos selecionado tanto td quanto img
-            const uniqueStamps = [];
-            const seen = new Set();
-            stamps.forEach(s => {
-                const key = `${s.name}|${s.imgKey}`;
-                if (!seen.has(key)) {
-                    seen.add(key);
-                    uniqueStamps.push(s);
-                }
-            });
+            // Lê a quantidade oficial declarada pelo Neopets na página: "has X stamps on this page!"
+            const pageText = rootDoc.body ? rootDoc.body.textContent : '';
+            const match = pageText.match(/has\s+(\d+)\s+stamps?\s+on\s+this\s+page/i);
+            const expectedCount = match ? parseInt(match[1], 10) : null;
 
-            return uniqueStamps;
+            return {
+                stamps: stamps,
+                expectedCount: expectedCount
+            };
         }
 
         // Descobre todas as páginas de selos disponíveis no menu de navegação
@@ -430,16 +435,20 @@
         // Sincronização Passiva da página atual caso seja o álbum do usuário
         if (isMyAlbum && searchParams.has('page_id')) {
             const pageId = searchParams.get('page_id');
-            const pageStamps = extractStampsFromDoc(document);
+            const result = extractStampsFromDoc(document);
             const storage = loadStorage();
             if (currentUser && (!storage.username || storage.username !== currentUser)) {
                 storage.username = currentUser;
             }
             storage.pages = storage.pages || {};
-            storage.pages[pageId] = pageStamps;
+            storage.pageCounts = storage.pageCounts || {};
+            storage.pages[pageId] = result.stamps;
+            if (result.expectedCount !== null) {
+                storage.pageCounts[pageId] = result.expectedCount;
+            }
             storage.lastSync = Date.now();
             saveStorage(storage);
-            console.log(`[Scriptnautas Selos] Sincronização passiva: página ${pageId} com ${pageStamps.length} selos.`);
+            console.log(`[Scriptnautas Selos] Sincronização passiva: página ${pageId} com ${result.stamps.length} selos (declarado pelo Neopets: ${result.expectedCount}).`);
         }
 
         // Injeta painel de sincronização no topo do álbum
@@ -479,9 +488,11 @@
                             Colecionados: <strong style="color: #4ade80;">${storage.totalCount || 0} selos</strong> | Última sync: <span>${lastSyncText}</span>
                         </div>
                     </div>
-                    <button id="sn-btn-sync-all" class="sn-btn-primary" style="font-size: 13px;">
-                        ⚡ Sincronizar Álbum Completo
-                    </button>
+                    <div style="display: flex; gap: 8px;">
+                        <button id="sn-btn-sync-all" class="sn-btn-primary" style="font-size: 13px;">
+                            ⚡ Sincronizar Álbum Completo
+                        </button>
+                    </div>
                 </div>
             `;
 
@@ -497,7 +508,7 @@
             document.getElementById('sn-btn-sync-all')?.addEventListener('click', startFullSync);
         }
 
-        // Processo de Sincronização Completa em Lote com Barra de Progresso
+        // Processo de Sincronização Completa em Lote com Barra de Progresso e Validador
         async function startFullSync() {
             const pageMap = discoverAlbumPages();
             const pageIds = Array.from(pageMap.keys()).sort((a, b) => a - b);
@@ -509,7 +520,7 @@
                 <div class="sn-sync-modal">
                     <h3 style="margin-top: 0; font-size: 18px; color: #38bdf8;">Sincronizando Álbum de Selos</h3>
                     <p style="font-size: 13px; color: #9ca3af; margin-bottom: 8px;">
-                        Lendo páginas do álbum de forma otimizada sem sobrecarregar sua conexão...
+                        Lendo páginas do álbum de forma otimizada com validação automática...
                     </p>
                     <div class="sn-progress-bar-bg">
                         <div id="sn-sync-fill" class="sn-progress-bar-fill"></div>
@@ -517,18 +528,30 @@
                     <div id="sn-sync-status" style="font-size: 13px; font-weight: 600; color: #e5e7eb;">
                         Iniciando... (0/${total})
                     </div>
+                    <div id="sn-sync-log" class="sn-log-container">Iniciando varredura...</div>
                 </div>
             `;
             document.body.appendChild(overlay);
 
             const fillEl = document.getElementById('sn-sync-fill');
             const statusEl = document.getElementById('sn-sync-status');
+            const logEl = document.getElementById('sn-sync-log');
+
+            function addLog(msg, isError = false) {
+                const line = document.createElement('div');
+                line.style.color = isError ? '#f87171' : '#d1d5db';
+                line.textContent = msg;
+                logEl.appendChild(line);
+                logEl.scrollTop = logEl.scrollHeight;
+            }
 
             const storage = loadStorage();
             if (currentUser) storage.username = currentUser;
             storage.pages = storage.pages || {};
+            storage.pageCounts = storage.pageCounts || {};
 
             let completed = 0;
+            let discrepancies = [];
             const batchSize = 2;
             const delayBetweenBatches = 150;
             const ownerParam = requestedOwner || currentUser || '';
@@ -543,7 +566,7 @@
                     return extractStampsFromDoc(doc);
                 } catch (err) {
                     console.error(`[Scriptnautas Selos] Falha ao ler página ${pageId}:`, err);
-                    return [];
+                    return { stamps: [], expectedCount: null };
                 }
             }
 
@@ -552,7 +575,21 @@
                 const results = await Promise.all(batch.map(pid => fetchPage(pid)));
 
                 batch.forEach((pid, idx) => {
-                    storage.pages[pid] = results[idx];
+                    const res = results[idx];
+                    storage.pages[pid] = res.stamps;
+                    if (res.expectedCount !== null) {
+                        storage.pageCounts[pid] = res.expectedCount;
+                        if (res.expectedCount !== res.stamps.length) {
+                            const pageName = pageMap.get(pid) || `Página ${pid}`;
+                            discrepancies.push({
+                                pageId: pid,
+                                name: pageName,
+                                expected: res.expectedCount,
+                                extracted: res.stamps.length
+                            });
+                            addLog(`⚠️ [Pág. ${pid} - ${pageName}]: Neopets diz ${res.expectedCount}, mas foram lidos ${res.stamps.length}!`, true);
+                        }
+                    }
                     completed++;
                 });
 
@@ -569,11 +606,29 @@
             storage.lastSync = Date.now();
             saveStorage(storage);
 
-            statusEl.innerHTML = `✅ Concluído! <strong style="color: #34d399;">${storage.totalCount}</strong> selos colecionados encontrados.`;
-            setTimeout(() => {
-                overlay.remove();
-                renderAlbumSyncBanner();
-            }, 1200);
+            if (discrepancies.length > 0) {
+                statusEl.innerHTML = `⚠️ Concluído com aviso: <strong style="color: #fbbf24;">${storage.totalCount}</strong> selos lidos. Veja detalhes abaixo:`;
+                addLog(`-----------------------------------------`);
+                addLog(`Encontradas ${discrepancies.length} página(s) com contagem diferente:`);
+                discrepancies.forEach(d => {
+                    addLog(`• Pág. ${d.pageId} (${d.name}): Neopets declara ${d.expected}, lidos ${d.extracted}`);
+                });
+                const closeBtn = document.createElement('button');
+                closeBtn.className = 'sn-btn-primary';
+                closeBtn.style.marginTop = '12px';
+                closeBtn.textContent = 'Fechar';
+                closeBtn.onclick = () => {
+                    overlay.remove();
+                    renderAlbumSyncBanner();
+                };
+                overlay.querySelector('.sn-sync-modal').appendChild(closeBtn);
+            } else {
+                statusEl.innerHTML = `✅ Concluído com sucesso! <strong style="color: #34d399;">${storage.totalCount}</strong> selos colecionados encontrados.`;
+                setTimeout(() => {
+                    overlay.remove();
+                    renderAlbumSyncBanner();
+                }, 1200);
+            }
         }
 
         renderAlbumSyncBanner();
