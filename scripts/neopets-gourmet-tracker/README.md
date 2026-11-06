@@ -18,7 +18,7 @@ Script para Tampermonkey que rastreia as comidas gourmet (raridade 90 a 100) con
    - **Cache local de 7 dias**: não faz requisições repetidas nem deixa seu restock lento. 100% das checagens nas lojas são instantâneas via memória local.
 
 3. **Destaque nas 27 Lojas Oficiais de Comida**:
-   - **⭐ GOURMET (NÃO COMIDO)**: Borda dourada pulsante, raridade destacada (ex: `r95`) e preço de mercado estimado para ajudar a decidir rápido durante o restock.
+   - **⭐ GOURMET (NÃO COMIDO)**: Borda dourada pulsante e raridade destacada (ex: `r95`), proporcionando foco visual total e ágil durante o restock.
    - **✓ COMIDO**: Comidas gourmet que seu pet já consumiu ficam com opacidade reduzida e marcadas em cinza, evitando gastos desnecessários.
    - **Comida Comum**: Itens que não pontuam no Gourmet Club (r1-r89) permanecem com estilo padrão, evitando poluição visual.
 

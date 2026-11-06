@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Neopets: Rastreador de Comidas Gourmet & Marcador de Lojas
 // @namespace    https://github.com/t-moedano/scriptnautas
-// @version      1.0.1
+// @version      1.0.2
 // @description  Rastreia comidas gourmet (r90-r100) comidas pelo seu Neopet e destaca itens gourmet faltantes nas 27 lojas oficiais de comida e em lojas de usuários, integrado ao itemDB.
 // @author       t-moedano
 // @match        *://*.neopets.com/gourmet_club.phtml*
@@ -395,24 +395,6 @@
                 font-family: system-ui, sans-serif;
             }
 
-            .sn-gourmet-price-tag {
-                position: absolute;
-                bottom: 4px;
-                left: 50%;
-                transform: translateX(-50%);
-                background: rgba(17, 24, 39, 0.92);
-                color: #fde047;
-                font-weight: 700;
-                font-size: 10px;
-                padding: 2px 6px;
-                border-radius: 4px;
-                border: 1px solid #78350f;
-                white-space: nowrap;
-                z-index: 15;
-                pointer-events: none;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-                font-family: system-ui, monospace;
-            }
 
             .sn-floating-status {
                 position: fixed;
@@ -674,13 +656,6 @@
                         const rarity = inspection.gourmetInfo ? inspection.gourmetInfo.rarity : 90;
                         badge.textContent = `⭐ GOURMET (r${rarity})`;
                         cell.appendChild(badge);
-
-                        if (inspection.gourmetInfo && inspection.gourmetInfo.price) {
-                            const priceTag = document.createElement('div');
-                            priceTag.className = 'sn-gourmet-price-tag';
-                            priceTag.textContent = `~${formatNumber(inspection.gourmetInfo.price)} NP`;
-                            cell.appendChild(priceTag);
-                        }
                     }
                 });
             }
@@ -744,13 +719,6 @@
                     const rarity = inspection.gourmetInfo ? inspection.gourmetInfo.rarity : 90;
                     badge.textContent = `⭐ GOURMET (r${rarity})`;
                     item.appendChild(badge);
-
-                    if (inspection.gourmetInfo && inspection.gourmetInfo.price) {
-                        const priceTag = document.createElement('div');
-                        priceTag.className = 'sn-gourmet-price-tag';
-                        priceTag.textContent = `~${formatNumber(inspection.gourmetInfo.price)} NP`;
-                        item.appendChild(priceTag);
-                    }
                 }
             });
 
