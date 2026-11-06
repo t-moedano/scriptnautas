@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Neopets: Rastreador de Selos & Marcador de Lojas
 // @namespace    https://github.com/t-moedano/scriptnautas
-// @version      1.0.5
-// @description  Rastreia selos, moedas e conchas colecionados no seu Álbum de Selos do Neopets e destaca itens faltantes em lojas oficiais (Post Office, Coin Shop, Sea Shells) e lojas de usuários.
+// @version      1.0.6
+// @description  Rastreia selos, moedas, conchas e amuletos colecionados no seu Álbum de Selos do Neopets e destaca itens faltantes em lojas oficiais (Post Office, Coin Shop, Sea Shells, Toy Shop) e lojas de usuários.
 // @author       t-moedano
 // @match        *://*.neopets.com/stamps.phtml*
 // @match        *://*.neopets.com/objects.phtml?*type=shop*
@@ -26,8 +26,19 @@
 
     const STORAGE_KEY = 'neopets_stamps_storage_v1';
 
-    // Lojas oficiais homologadas que vendem exclusivamente colecionáveis de álbum
+    // Lojas oficiais homologadas que vendem itens para o álbum de selos
     const OFFICIAL_STAMP_SHOPS = {
+        3: {
+            name: 'Toy Shop',
+            category: 'Amuletos / Charms',
+            filter: (name) => {
+                if (!name) return false;
+                const clean = normalizeTitle(name);
+                return clean.includes('collectable charm') || 
+                       clean.includes('collectible charm') || 
+                       clean.includes('baelia charm');
+            }
+        },
         58: { name: 'Neopian Post Office', category: 'Selos' },
         68: { name: 'Coin Shop', category: 'Moedas' },
         86: { name: 'Sea Shells', category: 'Conchas' }
@@ -652,9 +663,14 @@
                     item.setAttribute('data-sn-stamp-checked', 'true');
                     const img = item.querySelector('.item-img');
                     const nameEl = item.querySelector('.item-name b, .item-name');
-                    const itemName = img?.getAttribute('data-name') || nameEl?.textContent || '';
+                    const itemName = img?.getAttribute('data-name') || nameEl?.textContent || img?.getAttribute('alt') || img?.getAttribute('title') || '';
                     const itemSrc = img?.getAttribute('src') || '';
                     if (!itemName && !itemSrc) return;
+
+                    // Se a loja possuir filtro de itens de álbum (ex: Toy Shop, que vende brinquedos e charms)
+                    if (typeof shopInfo.filter === 'function' && !shopInfo.filter(itemName, itemSrc)) {
+                        return;
+                    }
 
                     const isCollected = isCollectedItem(itemName, itemSrc, collectedSet, imageSet);
 
@@ -682,9 +698,14 @@
 
                     const nameEl = cell.querySelector('b');
                     const img = cell.querySelector('img');
-                    const itemName = nameEl ? nameEl.textContent : '';
+                    const itemName = nameEl ? nameEl.textContent : (img?.getAttribute('alt') || img?.getAttribute('title') || '');
                     const itemSrc = img ? img.getAttribute('src') : '';
                     if (!itemName && !itemSrc) return;
+
+                    // Se a loja possuir filtro de itens de álbum (ex: Toy Shop, que vende brinquedos e charms)
+                    if (typeof shopInfo.filter === 'function' && !shopInfo.filter(itemName, itemSrc)) {
+                        return;
+                    }
 
                     const isCollected = isCollectedItem(itemName, itemSrc, collectedSet, imageSet);
 

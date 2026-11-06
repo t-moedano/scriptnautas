@@ -1,6 +1,6 @@
 # 📮 Neopets: Rastreador de Selos & Marcador de Lojas
 
-Script para Tampermonkey que rastreia os selos, moedas e conchas já colecionados no seu Álbum de Selos do Neopets e destaca automaticamente os itens que você **ainda não tem** nas lojas oficiais e de outros jogadores.
+Script para Tampermonkey que rastreia os selos, moedas, conchas e amuletos já colecionados no seu Álbum de Selos do Neopets e destaca automaticamente os itens que você **ainda não tem** nas lojas oficiais e de outros jogadores.
 
 [![Instalar no Tampermonkey](https://img.shields.io/badge/Instalar%20com%201--Clique-Tampermonkey-brightgreen?style=for-the-badge&logo=tampermonkey)](https://raw.githubusercontent.com/t-moedano/scriptnautas/main/scripts/neopets-stamp-tracker/neopets-stamp-tracker.user.js)
 
@@ -16,8 +16,10 @@ Script para Tampermonkey que rastreia os selos, moedas e conchas já colecionado
    - **Post Office** (Loja #58 - Selos)
    - **Coin Shop** (Loja #68 - Moedas colecionáveis)
    - **Sea Shells** (Loja #86 - Conchas do mar)
+   - **Toy Shop** (Loja #3 - Amuletos de Álbum: itens contendo `Collectable Charm` e o `Baelia Charm`)
    - Destaca itens **faltantes** com borda verde brilhante e tag `⭐ FALTANDO`.
    - Marca itens **já colecionados** com opacidade reduzida e tag `✓ Colecionado`.
+   - Na Toy Shop, itens normais (brinquedos, pelúcias, etc.) são ignorados e não poluem a tela.
 4. **Lojas de Usuários (`browseshop.phtml`)**:
    - **Filtro seguro**: escurece apenas os itens que você **tem certeza que já colecionou** no seu álbum com tag `✓ Colecionado`. Não altera itens não colecionados (evitando falsos positivos com comidas, poções, brinquedos, etc.).
 5. **Zero Lag / 0ms de Atraso**:
@@ -40,7 +42,7 @@ Script para Tampermonkey que rastreia os selos, moedas e conchas já colecionado
 4. Uma janela mostrará o progresso enquanto ele varre todas as páginas do seu álbum (leva apenas 4 a 5 segundos).
 
 ### Passo 3: Fazer Compras
-- Vá para a **Post Office** (`objects.phtml?type=shop&obj_type=58`), **Coin Shop** (`obj_type=68`), **Sea Shells** (`obj_type=86`) ou qualquer loja de usuários.
+- Vá para a **Post Office** (`objects.phtml?type=shop&obj_type=58`), **Coin Shop** (`obj_type=68`), **Sea Shells** (`obj_type=86`), **Toy Shop** (`obj_type=3`) ou qualquer loja de usuários.
 - Os itens que você ainda não tem estarão realçados em verde `⭐ FALTANDO` para você comprar no restock sem perder tempo pensando se já tem ou não!
 - Um distintivo flutuante no canto inferior direito mostrará o status da loja e quantos selos você tem salvos.
 
@@ -48,7 +50,8 @@ Script para Tampermonkey que rastreia os selos, moedas e conchas já colecionado
 
 ## 🏪 Lojas Oficiais Homologadas
 
-* **Neopian Post Office** (Loja #58 - Neopia Central)
-* **Coin Shop** (Loja #68 - Neopia Central)
-* **Sea Shells** (Loja #86 - Maraqua)
+* **Toy Shop** (Loja #3 - Neopia Central - Amuletos / Collectable Charms e Baelia Charm)
+* **Neopian Post Office** (Loja #58 - Neopia Central - Selos)
+* **Coin Shop** (Loja #68 - Neopia Central - Moedas)
+* **Sea Shells** (Loja #86 - Maraqua - Conchas)
 * **Lojas de Usuários** (`browseshop.phtml`)
