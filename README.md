@@ -14,6 +14,7 @@ Bem-vindo ao **Scriptnautas**! Este repositório reúne userscripts desenvolvido
 | **Neopets: Gourmet Food Tracker & Shop Marker** | Neopets | `1.0.2` | [📥 Instalar](https://raw.githubusercontent.com/t-moedano/scriptnautas/main/scripts/neopets-gourmet-tracker/neopets-gourmet-tracker.user.js) | Destaca comidas gourmet (r90-r100) faltantes nas 27 lojas oficiais e lojas de usuários, integrado ao itemDB. |
 | **Neopets: itemDB Wishlist Highlighter** | Neopets | `1.1.0` | [📥 Instalar](https://raw.githubusercontent.com/t-moedano/scriptnautas/main/scripts/neopets-itemdb-list-highlighter/neopets-itemdb-list-highlighter.user.js) | Destaca itens da sua lista personalizada do itemDB com cores por faixas de preço em qualquer loja oficial ou de usuários com preço estimado. |
 | **Neopets: Attic Restock Timer & Tracker** | Neopets | `1.0.1` | [📥 Instalar](https://raw.githubusercontent.com/t-moedano/scriptnautas/main/scripts/neopets-attic-tracker/neopets-attic-tracker.user.js) | Temporizador e rastreador inteligente de restock do Sótão Quase Abandonado com barra compacta sem sobreposição de itens, cálculo de janelas (+7m), conversor de fuso horário e alertas sonoros. |
+| **Neopets: Bonde da Maromba (Auto Trainer)** | Neopets | `1.2.0` | [📥 Instalar](https://raw.githubusercontent.com/t-moedano/scriptnautas/main/scripts/neopets-bonde-da-maromba/neopets-bonde-da-maromba.user.js) | Treinador automático para as 3 escolas de treino do Neopets com retirada de Codestones e Dubloons do SDB, compra no Shop Wizard e easter egg interativo de frases maromba. |
 
 ---
 
@@ -69,9 +70,12 @@ scriptnautas/
     ├── neopets-itemdb-list-highlighter/
     │   ├── README.md                      <- Guia detalhado do marcador por lista do itemDB
     │   └── neopets-itemdb-list-highlighter.user.js <- Código do script
-    └── neopets-attic-tracker/
-        ├── README.md                      <- Guia detalhado do temporizador do sótão
-        └── neopets-attic-tracker.user.js  <- Código do script
+    ├── neopets-attic-tracker/
+    │   ├── README.md                      <- Guia detalhado do temporizador do sótão
+    │   └── neopets-attic-tracker.user.js  <- Código do script
+    └── neopets-bonde-da-maromba/
+        ├── README.md                      <- Guia detalhado do Bonde da Maromba
+        └── neopets-bonde-da-maromba.user.js <- Código do script
 ```
 
 ### Checklist para criar um novo script:
