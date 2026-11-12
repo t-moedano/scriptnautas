@@ -30,7 +30,7 @@ Userscript para Tampermonkey que automatiza o treinamento dos seus pets nas trê
    - Verifica automaticamente se o pet já está matriculado em uma das outras duas escolas e exibe a informação no painel sem conflitos.
 
 4. **Easter Egg: Bonde da Maromba 💪**:
-   - Enquanto o pet aguarda pagamento, treina ou finaliza o curso, ele solta frases clássicas e memes de academia adaptados ao Neopets.
+   - Cada estado do pet tem frases próprias: **parado (`idle`)** provocando para clicar em Start, **aguardando pagamento**, **treinando** e **concluído**.
    - Durante o treino, a frase gira automaticamente a cada 45 segundos — e você também pode **clicar na frase** a qualquer momento para puxar outro grito de treino!
 
 ---

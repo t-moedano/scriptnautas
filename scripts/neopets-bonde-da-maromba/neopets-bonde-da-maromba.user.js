@@ -2,7 +2,7 @@
 // @name         Neopets: Bonde da Maromba (Auto Trainer)
 // @namespace    https://github.com/t-moedano/scriptnautas
 // @license      GPL-3.0
-// @version      1.2.0
+// @version      1.2.1
 // @description  Treina seus pets automaticamente nas escolas de treino do Neopets (com suporte a Codestones e Dubloons no SDB) e exibe frases de maromba dinâmicas durante o treino.
 // @author       t-moedano (baseado em Karla's Auto Trainer, alienxp e matt)
 // @match        *://*.neopets.com/island/training.phtml*
@@ -113,6 +113,13 @@
       "AUGE! Chama o fotógrafo que esse treino rendeu!",
       "MISSÃO CUMPRIDA! Pode mandar mais carga que o monstro tá pronto!",
       "BIRL! Mais forte que ontem, menor que amanhã!",
+    ],
+    idle: [
+      "Tô aqui mofando no banco, frango! Clica em Start logo!",
+      "E aí, vai ficar só olhando ou vai botar esse shape pra jogo?",
+      "Level {lvl} parado não ganha músculo, chefia!",
+      "Tô perdendo massa magra esperando você apertar ▶️ Start!",
+      "Não deixa o {pet} virar frango de padaria, aperta Start!",
     ],
   };
 
@@ -587,6 +594,7 @@
 
   function renderStatuses() {
     const moodByState = {
+      [STATE.IDLE]: "idle",
       [STATE.TRAINING]: "training",
       [STATE.WATCHING]: "training",
       [STATE.UNPAID]: "unpaid",
@@ -605,7 +613,7 @@
         info.state === STATE.TRAINING && info.timeLeft
           ? `Training - ${formatTime(info.timeLeft)}`
           : STATE_LABELS[info.state];
-      const mood = moodByState[info.state];
+      const mood = busyElsewhere[pet] ? "training" : moodByState[info.state];
       if (mood) {
         if (!panel.phraseAt || panel.phraseMood !== mood) showPhrase(pet, mood);
       } else {
