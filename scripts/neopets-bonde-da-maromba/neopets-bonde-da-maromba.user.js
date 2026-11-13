@@ -996,6 +996,10 @@
     await postForm(SCHOOLS[school].process, { type: "complete", pet_name: pet }, statusUrl(school));
     await sleep(randomInRange(800, 1500));
     updateData(await fetchStatusHtml(school));
+    if (allPetState[pet]?.state === STATE.DONE) {
+      await sleep(2000);
+      updateData(await fetchStatusHtml(school));
+    }
     if (allPetState[pet]?.state === STATE.DONE) throw new Error("the course could not be completed");
   }
 
@@ -1060,10 +1064,7 @@
 
     const count = (failures.get(pet) || 0) + 1;
     failures.set(pet, count);
-    if (count >= MAX_NETWORK_RETRIES) {
-      return haltPet(pet, `Stopped: ${error.message} (see console, F12)`);
-    }
-    setStatus(pet, `Error: ${error.message} - trying again in ${NETWORK_RETRY_MS / 1000}s...`);
+    setStatus(pet, `Erro (${error.message}) - tentando de novo em ${NETWORK_RETRY_MS / 1000}s...`);
     await sleep(NETWORK_RETRY_MS);
   }
 
