@@ -2,7 +2,7 @@
 // @name         Neopets: Bonde da Maromba (Auto Trainer)
 // @namespace    https://github.com/t-moedano/scriptnautas
 // @license      GPL-3.0
-// @version      1.2.1
+// @version      1.2.4
 // @description  Treina seus pets automaticamente nas escolas de treino do Neopets (com suporte a Codestones e Dubloons no SDB) e exibe frases de maromba dinâmicas durante o treino.
 // @author       t-moedano (baseado em Karla's Auto Trainer, alienxp e matt)
 // @match        *://*.neopets.com/island/training.phtml*
@@ -21,6 +21,8 @@
 // - Modificações originais por alienxp (link/botão tokenizado de pagamento, SDB, compra única e parada em erro)
 // - Alterações e criação do tema "Bonde da Maromba" por matt
 // - Suporte a Dubloons no SDB, easter egg interativo e manutenção no Scriptnautas por t-moedano
+// - Se o site recusar um curso (status acima do limite de 2x o nível), o pet treina Level em vez de parar
+// - Escolha de curso conforme as regras do Battlepedia: cada status até 2x o nível, HP até 3x, Str/Def param em 850
 
 (function () {
   "use strict";
@@ -397,6 +399,9 @@
   const saveSettings = () => GM_setValue("settings", JSON.stringify(settings));
   const saveGlobalSettings = () => GM_setValue("global_settings", JSON.stringify(globalSettings));
 
+  const getPetName = (entry) => (typeof entry === "string" ? entry : entry?.petName);
+  const getPetSchool = (entry) => (typeof entry === "string" ? school : entry?.school);
+
   function forEachStatusPet(root, callback) {
     root.querySelectorAll('td[colspan="2"]').forEach((header) => {
       const headerText = header.textContent.trim();
@@ -629,14 +634,15 @@
 
   function buildControls(pet) {
     const box = document.createElement("div");
-    const entry = startedPets.find((p) => p.petName === pet);
+    const entry = startedPets.find((p) => getPetName(p) === pet);
+    const petSchool = getPetSchool(entry);
 
     if (busyElsewhere[pet]) {
       box.textContent = "Training at " + SCHOOLS[busyElsewhere[pet]].name;
       return box;
     }
-    if (entry && entry.school !== school) {
-      box.textContent = "Training at " + SCHOOLS[entry.school].name;
+    if (entry && petSchool !== school) {
+      box.textContent = "Training at " + SCHOOLS[petSchool].name;
       return box;
     }
 
@@ -684,14 +690,16 @@
     }
 
     button.addEventListener("click", () => {
-      if (!startedPets.some((p) => p.petName === pet && p.school === school)) {
+      const isStarted = startedPets.some((p) => getPetName(p) === pet && getPetSchool(p) === school);
+      if (!isStarted) {
         halted.delete(pet);
         failures.delete(pet);
+        startedPets = startedPets.filter((p) => getPetName(p) !== pet);
         startedPets.push({ petName: pet, school });
         started = true;
         renderStatuses();
       } else {
-        startedPets = startedPets.filter((p) => p.petName !== pet);
+        startedPets = startedPets.filter((p) => getPetName(p) !== pet);
         started = false;
       }
       syncControls();
@@ -769,7 +777,7 @@
   function haltPet(pet, reason) {
     halted.set(pet, reason);
     watchers.delete(pet);
-    startedPets = startedPets.filter((p) => p.petName !== pet);
+    startedPets = startedPets.filter((p) => getPetName(p) !== pet);
     saveStartedPets();
     setStatus(pet, reason);
     hidePhrase(pet);
@@ -826,30 +834,37 @@
    * Choosing the course
    * ==================================================================== */
 
+  /** Strength and Defence give nothing more in battle from this value on; only HP is still worth training. */
+  const BATTLE_CAP = 850;
+
+  /**
+   * Picks the course for a pet. Returns { course, note }.
+   * - A stat can only be trained while it is below 2x the level (HP: 3x with "Hp 3x").
+   * - While HP is above 2x the level nothing else can be trained until the level catches up.
+   * - HP can be trained even if Strength/Defence are above 2x the level.
+   * - Strength/Defence at 850 or more are finished: if that was all the pet was set to train, focus on HP.
+   */
   function pickCourse(stats, options) {
     const { lvl, hp, str, def, mov } = stats;
-    const otherAboveDouble = str > lvl * 2 || def > lvl * 2 || mov > lvl * 2;
+    const hpFocus = (note) => ({ course: hp >= lvl * 3 ? "Level" : "Endurance", note });
 
-    // Hp 3x: keep training Endurance until HP reaches 3x the level, then train Level
-    if (options.hp3x) return hp >= lvl * 3 || otherAboveDouble ? "Level" : "Endurance";
+    if (options.hp3x) return hpFocus();
 
-    // otherwise train whichever ticked stat is the lowest
-    let lowest = 9999999;
-    let course = "Level";
-    const consider = (ticked, value, name) => {
-      if (ticked && value < lowest) {
-        lowest = value;
-        course = name;
-      }
-    };
-    consider(options.hp, hp, "Endurance");
-    consider(options.str, str, "Strength");
-    consider(options.def, def, "Defence");
-    consider(options.mov, mov, "Agility");
+    const limit = lvl * 2;
+    const maxedStr = str >= BATTLE_CAP;
+    const maxedDef = def >= BATTLE_CAP;
+    const candidates = [
+      options.hp && { course: "Endurance", value: hp },
+      options.str && !maxedStr && { course: "Strength", value: str },
+      options.def && !maxedDef && { course: "Defence", value: def },
+      options.mov && { course: "Agility", value: mov },
+    ].filter(Boolean);
+    const lowest = candidates.sort((a, b) => a.value - b.value)[0];
+    const finishedStats = (options.str && maxedStr) || (options.def && maxedDef);
 
-    // no stat may run past 2x the level: level up instead
-    if (hp > lvl * 2 || otherAboveDouble) course = "Level";
-    return course;
+    if (lowest && lowest.value < limit && hp <= limit) return { course: lowest.course };
+    if (finishedStats) return hpFocus("Str/Def already at 850 - focusing on HP");
+    return { course: "Level" }; // the stat is at its limit: level up to raise it
   }
 
   /* ======================================================================
@@ -979,22 +994,37 @@
   async function finishCourse(pet) {
     setStatus(pet, "Finishing course...");
     await postForm(SCHOOLS[school].process, { type: "complete", pet_name: pet }, statusUrl(school));
-    await sleep(randomInRange(500, 900));
+    await sleep(randomInRange(800, 1500));
     updateData(await fetchStatusHtml(school));
     if (allPetState[pet]?.state === STATE.DONE) throw new Error("the course could not be completed");
   }
 
   async function startCourse(pet) {
-    const course = pickCourse(petStats[pet], settings[pet]);
-    setStatus(pet, `Enrolling in ${course} course...`);
-    const html = await postForm(
-      SCHOOLS[school].process,
-      { type: "start", course_type: course, pet_name: pet },
-      coursesUrl(school),
-    );
-    const error = parseHTML(html).querySelector(".errorMessage");
-    if (error) return haltPet(pet, error.textContent.trim());
-    updateData(html);
+    const pick = pickCourse(petStats[pet], settings[pet]);
+    let course = pick.course;
+    const enroll = (name) =>
+      postForm(SCHOOLS[school].process, { type: "start", course_type: name, pet_name: pet }, coursesUrl(school));
+    const errorOf = (html) => parseHTML(html).querySelector(".errorMessage")?.textContent.trim() || "";
+
+    setStatus(pet, `Enrolling in ${course} course...${pick.note ? ` (${pick.note})` : ""}`);
+    let html = await enroll(course);
+    let error = errorOf(html);
+
+    // the site refused this stat (for example it would go past 2x the level): level up instead
+    if (error && course !== "Level") {
+      console.log(`[trainer] ${pet}: ${course} was refused ("${error}"), training Level instead`);
+      course = "Level";
+      setStatus(pet, `${error} - trying Level instead...`);
+      await sleep(randomInRange(800, 1500));
+      html = await enroll(course);
+      error = errorOf(html);
+    }
+    if (error) return haltPet(pet, error);
+
+    // Fetch the updated status page to register UNPAID/TRAINING state accurately
+    await sleep(randomInRange(800, 1500));
+    updateData(await fetchStatusHtml(school));
+
     // still not enrolled: don't keep sending the same request forever
     if (allPetState[pet]?.state === STATE.IDLE) throw new Error("the course did not start");
   }
@@ -1016,10 +1046,12 @@
 
   function nextPet() {
     const entry = startedPets.find((p) => {
-      const info = allPetState[p.petName];
-      return p.school === school && info && info.state !== STATE.WATCHING;
+      const petName = getPetName(p);
+      const petSchool = getPetSchool(p);
+      const info = allPetState[petName];
+      return petSchool === school && info && info.state !== STATE.WATCHING;
     });
-    return entry ? entry.petName : null;
+    return entry ? getPetName(entry) : null;
   }
 
   async function onPetError(pet, error) {
@@ -1058,18 +1090,35 @@
 
   (async function main() {
     try {
-      const snapshot = document.documentElement.outerHTML;
       school = Object.keys(SCHOOLS).find((key) => location.pathname.startsWith(SCHOOLS[key].page));
       if (!school) return;
 
-      await findPetsBusyElsewhere();
+      // Se o usuário acessar a página inicial da escola sem ?type=status, redireciona para a página de status
+      if (location.pathname === SCHOOLS[school].page && !location.search.includes("type=")) {
+        location.replace(statusUrl(school));
+        return;
+      }
+
+      const snapshot = document.documentElement.outerHTML;
+
+      // Monta painéis e carrega estado atual imediatamente
       setupGlobalPanel();
       setupPanels();
       updateData(snapshot);
+
+      // Revalida status se a aba voltar ao foco
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") {
+          refreshStatus();
+        }
+      });
+
+      // Busca escolas cruzadas em segundo plano sem travar a interface
+      findPetsBusyElsewhere();
+
       trainingLoop();
     } catch (error) {
       console.log(error);
     }
   })();
 })();
-
